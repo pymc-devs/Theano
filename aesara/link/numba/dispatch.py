@@ -17,6 +17,7 @@ from numba.extending import box
 from numba.np.unsafe.ndarray import to_fixed_tuple
 from numpy.core.multiarray import normalize_axis_index
 
+from aesara import config
 from aesara.compile.ops import DeepCopyOp, ViewOp
 from aesara.graph.basic import Apply, Variable
 from aesara.graph.fg import FunctionGraph
@@ -373,7 +374,7 @@ def {scalar_op_fn_name}({input_names}):
 
     signature = create_numba_signature(node, force_scalar=True)
 
-    return numba.njit(signature)(scalar_op_fn)
+    return numba.njit(signature, fastmath=config.numba.fastmath)(scalar_op_fn)
 
 
 @numba_funcify.register(Switch)
@@ -411,7 +412,7 @@ def numba_funcify_Add(op, node, **kwargs):
 
     nary_add_fn = binary_to_nary_func(node.inputs, "add", "+")
 
-    return numba.njit(signature)(nary_add_fn)
+    return numba.njit(signature, fastmath=config.numba.fastmath)(nary_add_fn)
 
 
 @numba_funcify.register(Mul)
@@ -421,7 +422,7 @@ def numba_funcify_Mul(op, node, **kwargs):
 
     nary_mul_fn = binary_to_nary_func(node.inputs, "mul", "*")
 
-    return numba.njit(signature)(nary_mul_fn)
+    return numba.njit(signature, fastmath=config.numba.fastmath)(nary_mul_fn)
 
 
 @numba_funcify.register(Elemwise)
@@ -433,7 +434,18 @@ def numba_funcify_Elemwise(op, node, use_signature=False, identity=None, **kwarg
     else:
         signature = []
 
-    numba_vectorize = numba.vectorize(signature, identity=identity)
+    target = (
+        getattr(node.tag, "numba__vectorize_target", None)
+        or config.numba.vectorize_target
+    )
+
+    numba_vectorize = numba.vectorize(
+        signature,
+        identity=identity,
+        target=target,
+        fastmath=config.numba.fastmath,
+    )
+
     global_env = {"scalar_op": scalar_op_fn, "numba_vectorize": numba_vectorize}
 
     elemwise_fn_name = f"elemwise_{get_name_for_object(scalar_op_fn)}"
@@ -505,7 +517,7 @@ def create_axis_reducer(
             x_axis_first = x.transpose(reaxis_first)
 
             res = np.full(res_shape, to_scalar(identity), dtype=dtype)
-            for m in range(x.shape[axis]):
+            for m in numba.prange(x.shape[axis]):
                 reduce_fn(res, x_axis_first[m], res)
 
             return set_out_dims(res)
@@ -527,8 +539,9 @@ def create_axis_reducer(
         @numba.njit(boundscheck=False)
         def careduce_axis(x):
             res = to_scalar(identity)
-            for val in x:
-                res = reduce_fn(res, val)
+            x_ravel = x.ravel()
+            for i in numba.prange(x_ravel.size):
+                res = reduce_fn(res, x_ravel[i])
             return set_out_dims(res)
 
     return careduce_axis
@@ -599,13 +612,13 @@ def numba_funcify_CAReduce(op, node, **kwargs):
         elemwise_fn, scalar_op_identity, axes, ndim, np_acc_dtype, input_name=input_name
     )
 
-    return numba.njit(careduce_fn)
+    return numba.njit(fastmath=config.numba.fastmath)(careduce_fn)
 
 
 @numba_funcify.register(Composite)
 def numba_funcify_Composite(op, node, **kwargs):
     signature = create_numba_signature(node, force_scalar=True)
-    composite_fn = numba.njit(signature)(
+    composite_fn = numba.njit(signature, fastmath=config.numba.fastmath)(
         numba_funcify(op.fgraph, squeeze_output=True, **kwargs)
     )
     return composite_fn
@@ -1145,7 +1158,7 @@ def numba_funcify_CumOp(op, node, **kwargs):
         np_func = np.multiply
         identity = 1
 
-    @numba.njit(boundscheck=False)
+    @numba.njit(boundscheck=False, fastmath=config.numba.fastmath)
     def cumop(x):
         out_dtype = x.dtype
         if x.shape[axis] < 2:
@@ -1154,7 +1167,7 @@ def numba_funcify_CumOp(op, node, **kwargs):
         x_axis_first = x.transpose(reaxis_first)
         res = np.empty(x_axis_first.shape, dtype=out_dtype)
 
-        for m in range(x.shape[axis]):
+        for m in numba.prange(x.shape[axis]):
             if m == 0:
                 np_func(identity, x_axis_first[m], res[m])
             else:
@@ -1183,7 +1196,7 @@ def numba_funcify_DiffOp(op, node, **kwargs):
 
     op = np.not_equal if dtype == "bool" else np.subtract
 
-    @numba.njit(boundscheck=False)
+    @numba.njit(boundscheck=False, fastmath=config.numba.fastmath)
     def diffop(x):
         res = x.copy()
 
