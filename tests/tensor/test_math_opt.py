@@ -4507,3 +4507,25 @@ def test_log1mexp_stabilization():
         f(np.array([-0.8, -0.6], dtype=config.floatX)),
         np.log(1 - np.exp([-0.8, -0.6])),
     )
+
+
+def test_local_logit_sigmoid():
+    """
+    Test that graphs of the form logit(sigmoid(x)) and sigmoid(logit(x)) get
+    optimized to x (sigmoid is the inverse of the logit)
+    """
+
+    def logit_fn(x):
+        return log(x / (1 - x))
+
+    x = fmatrix()
+
+    out = sigmoid(logit_fn(x))
+    fg = optimize(FunctionGraph([x], [out]))
+    assert not list(fg.toposort())
+    assert fg.inputs[0] is fg.outputs[0]
+
+    out = logit_fn(sigmoid(x))
+    fg = optimize(FunctionGraph([x], [out]))
+    assert not list(fg.toposort())
+    assert fg.inputs[0] is fg.outputs[0]

@@ -3528,3 +3528,27 @@ log1pmexp_to_log1mexp = PatternSub(
     allow_multiple_clients=True,
 )
 register_stabilize(log1pmexp_to_log1mexp, name="log1pmexp_to_log1mexp")
+
+
+# log(sigmoid(x) / (1 - sigmoid(x))) -> x
+# i.e logit(sigmoid(x)) -> x
+local_logit_sigmoid = PatternSub(
+    (log, (true_div, (sigmoid, "x"), (sub, 1, (sigmoid, "x")))),
+    "x",
+    tracks=[sigmoid],
+    get_nodes=get_clients_at_depth2,
+    allow_multiple_clients=True,
+    name="local_logit_sigmoid",
+)
+register_specialize(local_logit_sigmoid)
+
+
+# sigmoid(log(x / (1-x)) -> x
+# i.e., sigmoid(logit(x)) -> x
+local_sigmoid_logit = PatternSub(
+    (sigmoid, (log, (true_div, "x", (sub, 1, "x")))),
+    "x",
+    allow_multiple_clients=True,
+    name="local_sigmoid_logit",
+)
+register_specialize(local_sigmoid_logit)
