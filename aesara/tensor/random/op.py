@@ -4,20 +4,14 @@ from copy import copy
 import numpy as np
 
 import aesara
-from aesara.assert_op import Assert
 from aesara.configdefaults import config
 from aesara.graph.basic import Apply, Variable
+from aesara.graph.fg import FunctionGraph
 from aesara.graph.op import Op
+from aesara.graph.opt_utils import optimize_graph
 from aesara.misc.safe_asarray import _asarray
-from aesara.scalar.basic import Cast
-from aesara.tensor.basic import (
-    as_tensor_variable,
-    constant,
-    get_scalar_constant_value,
-    get_vector_length,
-)
-from aesara.tensor.elemwise import Elemwise
-from aesara.tensor.exceptions import NotScalarConstantError
+from aesara.tensor.basic import as_tensor_variable, constant, get_vector_length
+from aesara.tensor.basic_opt import ShapeFeature, topo_constant_folding
 from aesara.tensor.random.type import RandomStateType
 from aesara.tensor.random.utils import normalize_size_param, params_broadcast_shapes
 from aesara.tensor.type import TensorType, all_dtypes
@@ -187,15 +181,14 @@ class RandomVariable(Op):
 
         size_len = get_vector_length(size)
 
-        if self.ndim_supp == 0 and size_len > 0:
-            # In this case, we have a univariate distribution with a non-empty
-            # `size` parameter, which means that the `size` parameter
-            # completely determines the shape of the random variable.  More
-            # importantly, the `size` parameter may be the only correct source
-            # of information for the output shape, in that we would be misled
-            # by the `dist_params` if we tried to infer the relevant parts of
-            # the output shape from those.
-            return size
+        if size_len > 0:
+            if self.ndim_supp == 0:
+                return size
+            else:
+                supp_shape = self._shape_from_params(
+                    dist_params, param_shapes=param_shapes
+                )
+                return tuple(size) + tuple(supp_shape)
 
         # Broadcast the parameters
         param_shapes = params_broadcast_shapes(
@@ -286,30 +279,14 @@ class RandomVariable(Op):
         """
         shape = self._infer_shape(size, dist_params)
 
-        # Ignore `Cast`s, since they do not affect broadcastables
-        if getattr(shape, "owner", None) and (
-            isinstance(shape.owner.op, Elemwise)
-            and isinstance(shape.owner.op.scalar_op, Cast)
-        ):
-            shape = shape.owner.inputs[0]
+        shape_fg = FunctionGraph(
+            outputs=tuple(shape), features=[ShapeFeature()], clone=True
+        )
+        folded_shape = optimize_graph(
+            shape_fg, custom_opt=topo_constant_folding
+        ).outputs
 
-        # Let's try to do a better job than `_infer_ndim_bcast` when
-        # dimension sizes are symbolic.
-        bcast = []
-        for s in shape:
-            s_owner = getattr(s, "owner", None)
-
-            # Get rid of the `Assert`s added by `broadcast_shape`
-            if s_owner and isinstance(s_owner.op, Assert):
-                s = s_owner.inputs[0]
-
-            try:
-                s_val = get_scalar_constant_value(s)
-            except NotScalarConstantError:
-                s_val = False
-
-            bcast += [s_val == 1]
-        return bcast
+        return [getattr(s, "data", s) == 1 for s in folded_shape]
 
     def infer_shape(self, fgraph, node, input_shapes):
         _, size, _, *dist_params = node.inputs
@@ -337,22 +314,22 @@ class RandomVariable(Op):
         Parameters
         ----------
         rng: RandomStateType
-            Existing Aesara `RandomState` object to be used.  Creates a
-            new one, if `None`.
+            Existing Aesara ``RandomState`` object to be used.  Creates a new
+            one, if ``None``.
         size: int or Sequence
-            Numpy-like size of the output (i.e. replications).
+            NumPy-like size parameter.
         dtype: str
             The dtype of the sampled output.  If the value ``"floatX"`` is
-            given, then ``dtype`` is set to ``aesara.config.floatX``.  This
-            value is only used when `self.dtype` isn't set.
+            given, then `dtype` is set to ``aesara.config.floatX``.  This value is
+            only used when ``self.dtype`` isn't set.
         dist_params: list
             Distribution parameters.
 
         Results
         -------
-        out: `Apply`
-            A node with inputs `(rng, size, dtype) + dist_args` and outputs
-            `(rng_var, out_var)`.
+        out: Apply
+            A node with inputs ``(rng, size, dtype) + dist_args`` and outputs
+            ``(rng_var, out_var)``.
 
         """
         size = normalize_size_param(size)

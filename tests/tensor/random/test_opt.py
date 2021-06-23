@@ -12,6 +12,7 @@ from aesara.graph.optdb import OptimizationQuery
 from aesara.tensor.elemwise import DimShuffle
 from aesara.tensor.random.basic import (
     dirichlet,
+    multinomial,
     multivariate_normal,
     normal,
     poisson,
@@ -119,12 +120,20 @@ def test_inplace_optimization():
                 np.array([[0], [10], [100]], dtype=config.floatX),
                 np.diag(np.array([1e-6], dtype=config.floatX)),
             ],
-            [2, 3],
+            [2, 3, 3],
         ),
         (
             dirichlet,
             [np.array([[100, 1, 1], [1, 100, 1], [1, 1, 100]], dtype=config.floatX)],
-            [2, 3],
+            [2, 3, 3],
+        ),
+        (
+            multinomial,
+            [
+                np.array([10, 20], dtype="int64"),
+                np.array([[0.999, 0.001], [0.001, 0.999]], dtype=config.floatX),
+            ],
+            [3, 2],
         ),
     ],
 )
@@ -276,7 +285,7 @@ def test_local_rv_size_lift(dist_op, dist_params, size):
                 np.array([[-1, 20], [300, -4000]], dtype=config.floatX),
                 np.eye(2).astype(config.floatX) * 1e-6,
             ),
-            (3,),
+            (3, 2),
             1e-3,
         ),
     ],

@@ -2,6 +2,7 @@ import pickle
 from functools import partial
 
 import numpy as np
+import pytest
 import scipy.stats as stats
 from pytest import fixture, importorskip, raises
 
@@ -351,7 +352,7 @@ def test_mvnormal_samples():
         multivariate_normal,
         np.array([0, 1, 2], dtype=config.floatX),
         test_covar,
-        size=[2, 3],
+        size=[2, 3, 2],
         test_fn=test_fn,
     )
 
@@ -360,7 +361,7 @@ def test_mvnormal_samples():
         multivariate_normal,
         np.array([[0, 1, 2]], dtype=config.floatX),
         test_covar,
-        size=[2, 3],
+        size=[2, 3, 2, 2],
         test_fn=test_fn,
     )
 
@@ -368,9 +369,14 @@ def test_mvnormal_samples():
         multivariate_normal,
         np.array([[0], [10], [100]], dtype=config.floatX),
         np.diag(np.array([1e-6], dtype=config.floatX)),
-        size=[2, 3],
+        size=[2, 3, 3],
         test_fn=test_fn,
     )
+
+    with pytest.raises(ValueError, match="shape mismatch.*"):
+        multivariate_normal.rng_fn(
+            None, np.zeros((1, 2)), np.ones((1, 2, 2)), size=(4,)
+        )
 
 
 def test_mvnormal_ShapeFeature():
@@ -400,11 +406,10 @@ def test_mvnormal_ShapeFeature():
     cov = aet.as_tensor(test_covar).type()
     cov.tag.test_value = test_covar
 
-    d_rv = multivariate_normal(mean, cov, size=[2, 3])
+    d_rv = multivariate_normal(mean, cov, size=[2, 3, 2])
 
     fg = FunctionGraph(
-        [i for i in graph_inputs([d_rv]) if not isinstance(i, Constant)],
-        [d_rv],
+        outputs=[d_rv],
         clone=False,
         features=[ShapeFeature()],
     )
@@ -424,7 +429,7 @@ def test_dirichlet_samples():
     res = get_test_value(dirichlet(alphas))
     assert np.all(np.diag(res) >= res)
 
-    res = get_test_value(dirichlet(alphas, size=2))
+    res = get_test_value(dirichlet(alphas, size=(2, 3)))
     assert res.shape == (2, 3, 3)
     assert all(np.all(np.diag(r) >= r) for r in res)
 
@@ -440,12 +445,17 @@ def test_dirichlet_samples():
 
     alphas = np.array([[1000, 1, 1], [1, 1000, 1], [1, 1, 1000]], dtype=config.floatX)
 
-    assert dirichlet.rng_fn(rng_state, alphas, None).shape == alphas.shape
-    assert dirichlet.rng_fn(rng_state, alphas, size=10).shape == (10,) + alphas.shape
+    assert dirichlet.rng_fn(rng_state, alphas, size=()).shape == alphas.shape
     assert (
-        dirichlet.rng_fn(rng_state, alphas, size=(10, 2)).shape
+        dirichlet.rng_fn(rng_state, alphas, size=(10, 3)).shape == (10,) + alphas.shape
+    )
+    assert (
+        dirichlet.rng_fn(rng_state, alphas, size=(10, 2, 3)).shape
         == (10, 2) + alphas.shape
     )
+
+    with pytest.raises(ValueError, match="shape mismatch.*"):
+        dirichlet.rng_fn(rng_state, alphas, size=(8, 2, 1))
 
 
 def test_dirichlet_infer_shape():
@@ -457,8 +467,8 @@ def test_dirichlet_infer_shape():
         ([aet.ones((M_aet,))], (M_aet + 1,)),
         ([aet.ones((M_aet,))], (2, M_aet)),
         ([aet.ones((M_aet, M_aet + 1))], None),
-        ([aet.ones((M_aet, M_aet + 1))], (M_aet + 2,)),
-        ([aet.ones((M_aet, M_aet + 1))], (2, M_aet + 2, M_aet + 3)),
+        ([aet.ones((M_aet, M_aet + 1))], (M_aet + 2, M_aet)),
+        ([aet.ones((M_aet, M_aet + 1))], (2, M_aet + 2, M_aet + 3, M_aet)),
     ]
     for args, size in test_params:
         rv = dirichlet(*args, size=size)
@@ -476,8 +486,7 @@ def test_dirichlet_ShapeFeature():
     d_rv = dirichlet(aet.ones((M_aet, N_aet)), name="Gamma")
 
     fg = FunctionGraph(
-        [i for i in graph_inputs([d_rv]) if not isinstance(i, Constant)],
-        [d_rv],
+        outputs=[d_rv],
         clone=False,
         features=[ShapeFeature()],
     )
@@ -670,9 +679,12 @@ def test_multinomial_samples():
     exp_res = np.array([[10, 0], [0, 20]])
     assert np.array_equal(res, exp_res)
 
-    res = multinomial(test_M, test_p, size=(3,), rng=rng_state).eval()
+    res = multinomial(test_M, test_p, size=(3, 2), rng=rng_state).eval()
     exp_res = np.stack([exp_res] * 3)
     assert np.array_equal(res, exp_res)
+
+    with pytest.raises(ValueError, match="shape mismatch.*"):
+        multinomial.rng_fn(None, test_M, test_p, size=(1,))
 
 
 def test_categorical_samples():

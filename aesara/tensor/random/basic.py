@@ -269,14 +269,21 @@ class MvNormalRV(RandomVariable):
 
         if mean.ndim > 1 or cov.ndim > 2:
             # Neither SciPy nor NumPy implement parameter broadcasting for
-            # multivariate normals (or many other multivariate distributions),
-            # so we have implement a quick and dirty one here
+            # multivariate normals (or any other multivariate distributions),
+            # so we need to implement that here
             mean, cov = broadcast_params([mean, cov], cls.ndims_params)
             size = tuple(size or ())
 
             if size:
-                mean = np.broadcast_to(mean, size + mean.shape)
-                cov = np.broadcast_to(cov, size + cov.shape)
+                if (
+                    0 < mean.ndim - 1 <= len(size)
+                    and size[-mean.ndim + 1 :] != mean.shape[:-1]
+                ):
+                    raise ValueError(
+                        "shape mismatch: objects cannot be broadcast to a single shape"
+                    )
+                mean = np.broadcast_to(mean, size + mean.shape[-1:])
+                cov = np.broadcast_to(cov, size + cov.shape[-2:])
 
             res = np.empty(mean.shape)
             for idx in np.ndindex(mean.shape[:-1]):
@@ -300,16 +307,31 @@ class DirichletRV(RandomVariable):
 
     @classmethod
     def rng_fn(cls, rng, alphas, size):
-        if size is None:
-            size = ()
-        samples_shape = tuple(np.atleast_1d(size)) + alphas.shape
-        samples = np.empty(samples_shape)
-        alphas_bcast = np.broadcast_to(alphas, samples_shape)
+        if alphas.ndim > 1:
 
-        for index in np.ndindex(*samples_shape[:-1]):
-            samples[index] = rng.dirichlet(alphas_bcast[index])
+            size = tuple(size or ())
 
-        return samples
+            if size:
+                if (
+                    0 < alphas.ndim - 1 <= len(size)
+                    and size[-alphas.ndim + 1 :] != alphas.shape[:-1]
+                ):
+                    raise ValueError(
+                        "shape mismatch: objects cannot be broadcast to a single shape"
+                    )
+                samples_shape = size + alphas.shape[-1:]
+            else:
+                samples_shape = alphas.shape
+
+            samples = np.empty(samples_shape)
+            alphas_bcast = np.broadcast_to(alphas, samples_shape)
+
+            for index in np.ndindex(*samples_shape[:-1]):
+                samples[index] = rng.dirichlet(alphas_bcast[index])
+
+            return samples
+        else:
+            return rng.dirichlet(alphas, size=size)
 
 
 dirichlet = DirichletRV()
@@ -527,8 +549,12 @@ class MultinomialRV(RandomVariable):
             size = tuple(size or ())
 
             if size:
-                n = np.broadcast_to(n, size + n.shape)
-                p = np.broadcast_to(p, size + p.shape)
+                if 0 < p.ndim - 1 <= len(size) and size[-p.ndim + 1 :] != p.shape[:-1]:
+                    raise ValueError(
+                        "shape mismatch: objects cannot be broadcast to a single shape"
+                    )
+                n = np.broadcast_to(n, size)
+                p = np.broadcast_to(p, size + p.shape[-1:])
 
             res = np.empty(p.shape)
             for idx in np.ndindex(p.shape[:-1]):

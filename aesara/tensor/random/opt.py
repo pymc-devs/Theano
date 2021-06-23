@@ -63,9 +63,19 @@ def local_rv_size_lift(fgraph, node):
     if get_vector_length(size) > 0:
         dist_params = [
             broadcast_to(
-                p, (tuple(size) + tuple(p.shape)) if node.op.ndim_supp > 0 else size
+                p,
+                (
+                    tuple(size)
+                    + (
+                        tuple(p.shape)[-node.op.ndims_params[i] :]
+                        if node.op.ndims_params[i] > 0
+                        else ()
+                    )
+                )
+                if node.op.ndim_supp > 0
+                else size,
             )
-            for p in dist_params
+            for i, p in enumerate(dist_params)
         ]
     else:
         return
