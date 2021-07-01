@@ -30,7 +30,7 @@ from aesara.tensor.type import iscalar, vector
 no_mode = Mode("py", OptimizationQuery(include=[], exclude=[]))
 
 
-def apply_local_opt_to_rv(opt, op_fn, dist_op, dist_params, size, rng):
+def apply_local_opt_to_rv(opt, op_fn, dist_op, dist_params, size, rng, name=None):
     dist_params_aet = []
     for p in dist_params:
         p_aet = aet.as_tensor(p).type()
@@ -43,7 +43,7 @@ def apply_local_opt_to_rv(opt, op_fn, dist_op, dist_params, size, rng):
         s_aet.tag.test_value = s
         size_aet.append(s_aet)
 
-    dist_st = op_fn(dist_op(*dist_params_aet, size=size_aet, rng=rng))
+    dist_st = op_fn(dist_op(*dist_params_aet, size=size_aet, rng=rng, name=name))
 
     f_inputs = [
         p for p in dist_params_aet + size_aet if not isinstance(p, (slice, Constant))
@@ -282,7 +282,7 @@ def test_local_rv_size_lift(dist_op, dist_params, size):
     ],
 )
 @config.change_flags(compute_test_value_opt="raise", compute_test_value="raise")
-def test_DimShuffle_lift(ds_order, lifted, dist_op, dist_params, size, rtol):
+def test_Dimshuffle_lift(ds_order, lifted, dist_op, dist_params, size, rtol):
 
     rng = shared(np.random.default_rng(1233532), borrow=False)
 
@@ -504,3 +504,44 @@ def test_Dimshuffle_lift_restrictions():
     assert rv_node.op == normal
     assert isinstance(rv_node.inputs[-1].owner.op, DimShuffle)
     assert isinstance(rv_node.inputs[-2].owner.op, DimShuffle)
+
+
+@pytest.mark.parametrize(
+    "ds_order, lifted, dist_op, dist_params, size, rtol",
+    [
+        (
+            ("x",),
+            True,
+            normal,
+            (
+                np.array(-10.0, dtype=np.float64),
+                np.array(1e-6, dtype=np.float64),
+            ),
+            (),
+            1e-7,
+        ),
+        (
+            (0, 1, 2),
+            True,
+            normal,
+            (np.array(0).astype(config.floatX), np.array(1e-6).astype(config.floatX)),
+            (2, 1, 2),
+            1e-3,
+        ),
+    ],
+)
+def test_Dimshuffle_lift_remane(ds_order, lifted, dist_op, dist_params, size, rtol):
+
+    rng = shared(np.random.default_rng(1233532), borrow=False)
+
+    new_out, *_ = apply_local_opt_to_rv(
+        local_dimshuffle_rv_lift,
+        lambda rv: rv.dimshuffle(ds_order),
+        dist_op,
+        dist_params,
+        size,
+        rng,
+        name="test_name",
+    )
+
+    assert new_out.name == "test_name_lifted"
