@@ -1083,7 +1083,7 @@ betainc = BetaInc(upgrade_to_float_no_complex, name="betainc")
 class BetaIncDer(ScalarOp):
     """
     Gradient of the regularized incomplete beta function wrt to the first
-    argument (alpha) or the second argument (bbeta), depending on whether the
+    argument (alpha) or the second argument (beta), depending on whether the
     fourth argument to betainc_der is `True` or `False`, respectively.
 
     Reference: Boik, R. J., & Robison-Cox, J. F. (1998). Derivatives of the incomplete beta function.
@@ -1253,16 +1253,13 @@ class BetaIncDer(ScalarOp):
             derivative_old = derivative
 
             if d_errapx <= err_threshold:
-                break
+                return derivative
 
-            if n >= max_iters:
-                warnings.warn(
-                    f"_betainc_derivative did not converge after {n} iterations",
-                    RuntimeWarning,
-                )
-                return np.nan
-
-        return derivative
+        warnings.warn(
+            f"betainc_der did not converge after {n} iterations",
+            RuntimeWarning,
+        )
+        return np.nan
 
 
 betainc_der = BetaIncDer(upgrade_to_float_no_complex, name="betainc_der")
