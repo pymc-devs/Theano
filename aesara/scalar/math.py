@@ -556,6 +556,14 @@ class GammaInc(BinaryScalarOp):
     def impl(self, k, x):
         return GammaInc.st_impl(k, x)
 
+    def grad(self, inputs, grads):
+        (k, x) = inputs
+        (gz,) = grads
+        return [
+            gz * gammainc_der(k, x),
+            gz * exp(-x + (k - 1) * log(x) - gammaln(k)),
+        ]
+
     def c_support_code(self, **kwargs):
         with open(os.path.join(os.path.dirname(__file__), "c_code", "gamma.c")) as f:
             raw = f.read()
@@ -597,6 +605,14 @@ class GammaIncC(BinaryScalarOp):
     def impl(self, k, x):
         return GammaIncC.st_impl(k, x)
 
+    def grad(self, inputs, grads):
+        (k, x) = inputs
+        (gz,) = grads
+        return [
+            gz * gammaincc_der(k, x),
+            gz * -exp(-x + (k - 1) * log(x) - gammaln(k)),
+        ]
+
     def c_support_code(self, **kwargs):
         with open(os.path.join(os.path.dirname(__file__), "c_code", "gamma.c")) as f:
             raw = f.read()
@@ -622,6 +638,159 @@ class GammaIncC(BinaryScalarOp):
 
 
 gammaincc = GammaIncC(upgrade_to_float, name="gammaincc")
+
+
+class GammaIncDer(BinaryScalarOp):
+    """
+    Gradient of the the regularized lower gamma function (P) wrt to the first
+    argument (k, a.k.a. alpha). Adapted from STAN `grad_reg_lower_inc_gamma.hpp`
+
+    Reference: Gautschi, W. (1979). A computational procedure for incomplete gamma functions.
+    ACM Transactions on Mathematical Software (TOMS), 5(4), 466-481.
+    """
+
+    def impl(self, k, x):
+
+        if x == 0:
+            return 0
+
+        sqrt_exp = -756 - x ** 2 + 60 * x
+        if (
+            (k < 0.8 and x > 15)
+            or (k < 12 and x > 30)
+            or (sqrt_exp > 0 and k < np.sqrt(sqrt_exp))
+        ):
+            return -GammaIncCDer.st_impl(k, x)
+
+        precision = 1e-10
+        max_iters = int(1e5)
+
+        log_x = np.log(x)
+        log_gamma_k_plus_1 = scipy.special.gammaln(k + 1)
+
+        k_plus_n = k
+        log_gamma_k_plus_n_plus_1 = log_gamma_k_plus_1
+        sum_a = 0.0
+        for n in range(0, max_iters + 1):
+            term = np.exp(k_plus_n * log_x - log_gamma_k_plus_n_plus_1)
+            sum_a += term
+
+            if term <= precision:
+                break
+
+            log_gamma_k_plus_n_plus_1 += np.log1p(k_plus_n)
+            k_plus_n += 1
+
+        if n >= max_iters:
+            warnings.warn(
+                f"gammainc_der did not converge after {n} iterations",
+                RuntimeWarning,
+            )
+            return np.nan
+
+        k_plus_n = k
+        log_gamma_k_plus_n_plus_1 = log_gamma_k_plus_1
+        sum_b = 0.0
+        for n in range(0, max_iters + 1):
+            term = np.exp(
+                k_plus_n * log_x - log_gamma_k_plus_n_plus_1
+            ) * scipy.special.digamma(k_plus_n + 1)
+            sum_b += term
+
+            if term <= precision and n >= 1:  # Require at least two iterations
+                return np.exp(-x) * (log_x * sum_a - sum_b)
+
+            log_gamma_k_plus_n_plus_1 += np.log1p(k_plus_n)
+            k_plus_n += 1
+
+        warnings.warn(
+            f"gammainc_der did not converge after {n} iterations",
+            RuntimeWarning,
+        )
+        return np.nan
+
+
+gammainc_der = GammaIncDer(upgrade_to_float, name="gammainc_der")
+
+
+class GammaIncCDer(BinaryScalarOp):
+    """
+    Gradient of the the regularized upper gamma function (Q) wrt to the first
+    argument (k, a.k.a. alpha). Adapted from STAN `grad_reg_inc_gamma.hpp`
+    """
+
+    @staticmethod
+    def st_impl(k, x):
+        gamma_k = scipy.special.gamma(k)
+        digamma_k = scipy.special.digamma(k)
+        log_x = np.log(x)
+
+        # asymptotic expansion http://dlmf.nist.gov/8.11#E2
+        if (x >= k) and (x >= 8):
+            S = 0
+            k_minus_one_minus_n = k - 1
+            fac = k_minus_one_minus_n
+            dfac = 1
+            xpow = x
+            delta = dfac / xpow
+
+            for n in range(1, 10):
+                k_minus_one_minus_n -= 1
+                S += delta
+                xpow *= x
+                dfac = k_minus_one_minus_n * dfac + fac
+                fac *= k_minus_one_minus_n
+                delta = dfac / xpow
+                if np.isinf(delta):
+                    warnings.warn(
+                        "gammaincc_der did not converge",
+                        RuntimeWarning,
+                    )
+                    return np.nan
+
+            return (
+                scipy.special.gammaincc(k, x) * (log_x - digamma_k)
+                + np.exp(-x + (k - 1) * log_x) * S / gamma_k
+            )
+
+        # gradient of series expansion http://dlmf.nist.gov/8.7#E3
+        else:
+            log_precision = np.log(1e-6)
+            max_iters = int(1e5)
+            S = 0
+            log_s = 0.0
+            s_sign = 1
+            log_delta = log_s - 2 * np.log(k)
+            for n in range(1, max_iters + 1):
+                S += np.exp(log_delta) if s_sign > 0 else -np.exp(log_delta)
+                s_sign = -s_sign
+                log_s += log_x - np.log(n)
+                log_delta = log_s - 2 * np.log(n + k)
+
+                if np.isinf(log_delta):
+                    warnings.warn(
+                        "gammaincc_der did not converge",
+                        RuntimeWarning,
+                    )
+                    return np.nan
+
+                if log_delta <= log_precision:
+                    return (
+                        scipy.special.gammainc(k, x) * (digamma_k - log_x)
+                        + np.exp(k * log_x) * S / gamma_k
+                    )
+
+            warnings.warn(
+                f"gammaincc_der did not converge after {n} iterations",
+                RuntimeWarning,
+            )
+            return np.nan
+
+    def impl(self, k, x):
+        return self.st_impl(k, x)
+
+
+gammaincc_der = GammaIncCDer(upgrade_to_float, name="gammaincc_der")
 
 
 class GammaU(BinaryScalarOp):
