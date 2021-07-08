@@ -592,7 +592,7 @@ class GammaIncC(BinaryScalarOp):
 
     @staticmethod
     def st_impl(k, x):
-        return scipy.special.gammaincc(x, k)
+        return scipy.special.gammaincc(k, x)
 
     def impl(self, k, x):
         return GammaIncC.st_impl(k, x)
