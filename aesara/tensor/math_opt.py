@@ -1862,6 +1862,23 @@ def local_neg_div_neg(fgraph, node):
                     return [true_div(new_num, denom)]
 
 
+@register_specialize
+@local_optimizer([sub])
+def local_sub_neg_to_add(fgraph, node):
+    """
+    x - (-y) -> x + y
+
+    """
+    if node.op == sub:
+        minuend, subtrahend = node.inputs
+
+        if subtrahend.owner:
+            if subtrahend.owner.op == neg:
+                pre_neg = subtrahend.owner.inputs[0]
+                new_out = add(minuend, pre_neg)
+                return [new_out]
+
+
 @local_optimizer([mul])
 def local_mul_zero(fgraph, node):
     """
