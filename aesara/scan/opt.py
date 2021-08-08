@@ -116,8 +116,7 @@ list_opt_slice = [
 
 @local_optimizer([Scan])
 def remove_constants_and_unused_inputs_scan(fgraph, node):
-    """
-    Move constants into the inner graph, and remove unused inputs.
+    """Move constants into the inner graph, and remove unused inputs.
 
     Constants that are in the outer graph are represented by a free symbolic
     variable in the inner graph. If we move them into the inner graph,
@@ -225,12 +224,17 @@ def remove_constants_and_unused_inputs_scan(fgraph, node):
         return False
 
 
-# This is a global opt for historical reason
-# It should be possible to change it to a local opt.
 class PushOutNonSeqScan(GlobalOptimizer):
-    """
-    A global optimizer for pushing out the variables inside the scan that depend
-    only on non-sequences.
+    r"""Pushing out the variables inside the `Scan` that depend only on non-sequences.
+
+    This optimizations pushes, out of `Scan`'s inner function and into the outer
+    function, computation that depends only on non-sequence inputs. Such
+    computation ends up being done every iteration on the same values so moving
+    it to the outer function to be executed only once, before the `Scan` `Op`,
+    reduces the amount of computation that needs to be performed.
+
+    TODO: This is a global opt for historical reasonons.  It should be possible
+    to change it to a local opt.
     """
 
     def __init__(self):
@@ -443,12 +447,19 @@ class PushOutNonSeqScan(GlobalOptimizer):
             return False
 
 
-# This is a global opt for historical reason
-# It should be possible to change it to a local opt.
 class PushOutSeqScan(GlobalOptimizer):
-    """
-    A global optimizer for pushing out the variables inside the
-    scan that depend only on constants and sequences.
+    r"""Push out the variables inside the `Scan` that depend only on constants and sequences.
+
+    This optimization resembles `PushOutNonSeqScan` but it tries to push, out of
+    the inner function, the computation that only relies on sequence and
+    non-sequence inputs. The idea behind this optimization is that, when it is
+    possible to do so, it is generally more computationally efficient to perform
+    a single operation on a large tensor rather then perform that same operation
+    many times on many smaller tensors. In many cases, this optimization can
+    increase memory usage but, in some specific cases, it can also decrease it.
+
+    TODO: This is a global opt for historical reasonons.  It should be possible
+    to change it to a local opt.
     """
 
     def __init__(self):
@@ -706,9 +717,13 @@ class PushOutSeqScan(GlobalOptimizer):
 
 
 class PushOutScanOutput(GlobalOptimizer):
-    """
-    This is an optimization that can push operations performed
-    at the end of the inner graph of scan to outside of scan.
+    r"""Push operations performed at the end of the inner graph of `Scan` to outside of `Scan`.
+
+    This optimizations attempts to push out some of the computation at the end
+    of the inner function to the outer function, to be executed after the `Scan`
+    node. Like `PushOutSeqScan`, this optimization aims to replace many operations
+    on small tensors by few operations on large tensors. It can also lead to
+    increased memory usage.
     """
 
     def __init__(self):
@@ -968,8 +983,11 @@ class PushOutScanOutput(GlobalOptimizer):
 
 
 class ScanInplaceOptimizer(GlobalOptimizer):
-    """
-    Graph optimizer for Scan (makes it run inplace).
+    """Make `Scan`s perform in-place.
+
+    This optimization attempts to make `Scan` compute its recurrent outputs inplace
+    on the input tensors that contain their initial states. This optimization can
+    improve runtime performance as well as reduce memory usage.
 
     """
 
@@ -983,8 +1001,7 @@ class ScanInplaceOptimizer(GlobalOptimizer):
         fgraph.attach_feature(DestroyHandler())
 
     def attempt_scan_inplace(self, fgraph, node, output_indices, alloc_ops):
-        """Attempts to replace a Scan node by one which computes the specified
-        outputs inplace.
+        """Attempt to replace a `Scan` node by one which computes the specified outputs inplace.
 
         Parameters
         ----------
@@ -1134,8 +1151,24 @@ class ScanInplaceOptimizer(GlobalOptimizer):
 
 
 class ScanSaveMem(GlobalOptimizer):
-    """
-    Graph optimizer that reduces scan memory consumption.
+    r"""Graph optimizer that reduces scan memory consumption.
+
+    This optimizations attempts to determine if a `Scan` node, during its execution,
+    for any of its outputs, can get away with allocating a memory buffer that is
+    large enough to contain some of the computed timesteps of that output but not
+    all of them.
+
+    By default, during the execution of a `Scan` node, memory buffers will be
+    allocated to store the values computed for every output at every iteration.
+    However, in some cases, there are outputs for which there is only really a
+    need to store the most recent ``N`` values, not all of them.
+
+    For instance, if a `Scan` node has a SITSOT output (last computed value is
+    fed back as an input at the next iteration) and only the last timestep of
+    that output is ever used in the outer function, the `ScanSaveMem` optimization
+    could determine that there is no need to store all computed timesteps for
+    that SITSOT output. Only the most recently computed timestep ever needs to
+    be kept in memory.
 
     """
 
@@ -1677,8 +1710,16 @@ class ScanSaveMem(GlobalOptimizer):
 
 
 class ScanMerge(GlobalOptimizer):
-    """
-    Graph optimizer that merges different scan ops.
+    r"""Graph optimizer that merges different scan ops.
+
+    This optimization attempts to fuse distinct `Scan` `Op`s into a single `Scan` `Op`
+    that performs all the computation. The main advantage of merging `Scan` `Op`\s
+    together comes from the possibility of both original `Op`\s having some
+    computation in common. In such a setting, this computation ends up being done
+    twice. The fused `Scan` `Op`, however, would only need to do it once and could
+    therefore be more computationally efficient. Also, since every `Scan` node
+    involves a certain overhead, at runtime, reducing the number of `Scan` nodes in
+    the graph can improve performance.
 
     """
 
@@ -1954,6 +1995,13 @@ def make_equiv(lo, li):
 
 @local_optimizer([Scan])
 def scan_merge_inouts(fgraph, node):
+    """
+    This optimization attempts to merge a `Scan` `Op`'s identical outer inputs as well
+    as merge its identical outer outputs (outputs that perform the same
+    computation on the same inputs). This can reduce the amount of computation as
+    well as result in a simpler graph for both the inner function and the outer
+    function.
+    """
     if not isinstance(node.op, Scan):
         return False
 
@@ -2130,9 +2178,10 @@ def scan_merge_inouts(fgraph, node):
 
 
 class PushOutDot1(GlobalOptimizer):
-    """
-    Graph optimizer for Scan(makes it run inplace).
-
+    r"""
+    This is another optimization that attempts to detect certain patterns of
+    computation in a `Scan` `Op`'s inner function and move this computation to the
+    outer graph.
     """
 
     def __init__(self):
