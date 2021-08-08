@@ -701,12 +701,6 @@ def compress_outs(op, not_required, inputs):
         n_sit_sot=0,
         n_shared_outs=0,
         n_nit_sot=0,
-        truncate_gradient=op.info.truncate_gradient,
-        name=op.info.name,
-        gpua=op.info.gpua,
-        as_while=op.info.as_while,
-        profile=op.info.profile,
-        allow_gc=op.info.allow_gc,
     )
 
     op_inputs = op.inputs[: op.n_seqs]
@@ -886,16 +880,18 @@ class ScanArgs:
         _inner_inputs,
         _inner_outputs,
         info,
+        as_while,
         clone=True,
     ):
         self.n_steps = outer_inputs[0]
+        self.as_while = as_while
 
         if clone:
             rval = reconstruct_graph(_inner_inputs, _inner_outputs, "")
         else:
             rval = (_inner_inputs, _inner_outputs)
 
-        if info.as_while:
+        if self.as_while:
             self.cond = [rval[1][-1]]
             inner_outputs = rval[1][:-1]
         else:
@@ -1000,18 +996,6 @@ class ScanArgs:
         assert p == len(outer_outputs)
         assert q == len(inner_outputs)
 
-        self.other_info = {
-            k: getattr(info, k)
-            for k in (
-                "truncate_gradient",
-                "name",
-                "gpua",
-                "as_while",
-                "profile",
-                "allow_gc",
-            )
-        }
-
     @staticmethod
     def from_node(node, clone=False):
         from aesara.scan.op import Scan
@@ -1024,6 +1008,7 @@ class ScanArgs:
             node.op.inputs,
             node.op.outputs,
             node.op.info,
+            node.op.as_while,
             clone=clone,
         )
 
@@ -1041,14 +1026,8 @@ class ScanArgs:
             n_shared_outs=0,
             n_mit_mot_outs=0,
             mit_mot_out_slices=(),
-            truncate_gradient=-1,
-            name=None,
-            gpua=False,
-            as_while=False,
-            profile=False,
-            allow_gc=False,
         )
-        res = cls([1], [], [], [], info)
+        res = cls([1], [], [], [], info, False)
         res.n_steps = None
         return res
 
@@ -1152,7 +1131,6 @@ class ScanArgs:
             n_shared_outs=len(self.outer_in_shared),
             n_mit_mot_outs=sum(len(s) for s in self.mit_mot_out_slices),
             mit_mot_out_slices=tuple(self.mit_mot_out_slices),
-            **self.other_info,
         )
 
     def get_alt_field(self, var_info, alt_prefix):
@@ -1341,7 +1319,6 @@ class ScanArgs:
                     "mit_mot_out_slices",
                     "mit_mot_in_slices",
                     "mit_sot_in_slices",
-                    "other_info",
                 )
             ):
                 setattr(res, attr, copy.copy(getattr(self, attr)))

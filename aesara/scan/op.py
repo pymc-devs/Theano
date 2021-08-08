@@ -100,13 +100,6 @@ class ScanInfo:
     n_sit_sot: int
     n_shared_outs: int
     n_nit_sot: int
-    truncate_gradient: bool = False
-    name: Optional[str] = None
-    gpua: bool = False
-    as_while: bool = False
-    profile: Optional[Union[str, bool]] = None
-    allow_gc: bool = True
-    strict: bool = True
 
 
 TensorConstructorType = Callable[[List[bool], Union[str, np.generic]], TensorType]
@@ -466,7 +459,7 @@ class ScanPropertiesMixin:
         # output with type GpuArrayType
         from aesara.gpuarray import GpuArrayType
 
-        if not self.info.gpua:
+        if not self.gpua:
             for inp in self.inputs:
                 if isinstance(inp.type, GpuArrayType):
                     raise TypeError(
@@ -496,6 +489,13 @@ class Scan(Op, ScanPropertiesMixin):
         info: ScanInfo,
         mode: Optional[Mode] = None,
         typeConstructor: Optional[TensorConstructorType] = None,
+        truncate_gradient: bool = False,
+        name: Optional[str] = None,
+        gpua: bool = False,
+        as_while: bool = False,
+        profile: Optional[Union[str, bool]] = None,
+        allow_gc: bool = True,
+        strict: bool = True,
     ):
         r"""
 
@@ -506,33 +506,85 @@ class Scan(Op, ScanPropertiesMixin):
         outputs
             Outputs of the inner function of `Scan`.
         info
-            Dictionary containing different properties of the `Scan` `Op` (like
-            number of different types of arguments, name, mode, if it should run on
-            GPU or not, etc.).
+            A collection of information about the sequences and taps.
         mode
-            The compilation mode for the inner graph.
+            The mode used to compile the inner-graph.
+            If you prefer the computations of one step of `scan` to be done
+            differently then the entire function, you can use this parameter to
+            describe how the computations in this loop are done (see
+            `aesara.function` for details about possible values and their meaning).
         typeConstructor
-            Function that constructs an equivalent to Aesara `TensorType`.
+            Function that constructs a `TensorType` for the outputs.
+        truncate_gradient
+            `truncate_gradient` is the number of steps to use in truncated
+            back-propagation through time (BPTT).  If you compute gradients through
+            a `Scan` `Op`, they are computed using BPTT. By providing a different
+            value then ``-1``, you choose to use truncated BPTT instead of classical
+            BPTT, where you go for only `truncate_gradient` number of steps back in
+            time.
+        name
+            When profiling `scan`, it is helpful to provide a name for any
+            instance of `scan`.
+            For example, the profiler will produce an overall profile of your code
+            as well as profiles for the computation of one step of each instance of
+            `Scan`. The `name` of the instance appears in those profiles and can
+            greatly help to disambiguate information.
+        gpua
+            If ``True``, this `Op` should run on a GPU.
+        as_while
+            Whether or not the `Scan` is a ``while``-loop.
+        profile
+            If ``True`` or a non-empty string, a profile object will be created and
+            attached to the inner graph of `Scan`. When `profile` is ``True``, the
+            profiler results will use the name of the `Scan` instance, otherwise it
+            will use the passed string.  The profiler only collects and prints
+            information when running the inner graph with the `CVM` `Linker`.
+        allow_gc
+            Set the value of `allow_gc` for the internal graph of the `Scan`.  If
+            set to ``None``, this will use the value of
+            `aesara.config.scan__allow_gc`.
+
+            The full `Scan` behavior related to allocation is determined by this
+            value and the flag `aesara.config.allow_gc`. If the flag
+            `allow_gc` is ``True`` (default) and this `allow_gc` is ``False``
+            (default), then we let `Scan` allocate all intermediate memory
+            on the first iteration, and they are not garbage collected
+            after that first iteration; this is determined by `allow_gc`. This can
+            speed up allocation of the subsequent iterations. All those temporary
+            allocations are freed at the end of all iterations; this is what the
+            flag `aesara.config.allow_gc` means.
+
+            If you use pre-allocation and this `Scan` is on GPU, the speed up from
+            `allow_gc` is small. If you are missing memory, disabling `allow_gc`
+            could help you run graph that request much memory.
+        strict
+            If ``True``, all the shared variables used in the inner-graph must be provided.
 
         Notes
         -----
-        `typeConstructor` had been added to refactor how
-        Aesara deals with the GPU. If it runs on the GPU, scan needs
-        to construct certain outputs (those who reside in the GPU
-        memory) as the GPU-specific type.  However we can not import
-        gpu code in this file (as it is in sandbox, and not available
-        on each machine) so the workaround is that the GPU
-        optimization passes to the constructor of this class a
-        function that is able to construct a GPU type. This way the
-        class `Scan` does not need to be aware of the details for the
-        GPU, it just constructs any tensor using this function (which
-        by default constructs normal tensors).
+        `typeConstructor` had been added to refactor how Aesara deals with the
+        GPU. If it runs on the GPU, `Scan` needs to construct certain outputs
+        (those that reside in GPU memory) as the GPU-specific `Type`.  Since we
+        cannot import GPU code here, the GPU optimizations pass the constructor
+        of this class a function that is able to construct a GPU `Type`. This
+        way the class `Scan` does not need to be aware of the GPU details--it
+        simply constructs tensors using this function (which by default
+        constructs normal tensors).
+
+        TODO: Clean up this approach and everything else related to GPUs; it's
+        all currently a very leaky set of abstractions.
 
         """
-        # adding properties into self
         self.inputs = inputs
         self.outputs = outputs
         self.info = info
+        self.truncate_gradient = truncate_gradient
+        self.name = name
+        self.gpua = gpua
+        self.as_while = as_while
+        self.profile = profile
+        self.allow_gc = allow_gc
+        self.strict = strict
         self.__dict__.update(dataclasses.asdict(info))
 
         # Clone mode_instance, altering "allow_gc" for the linker,
@@ -591,11 +643,6 @@ class Scan(Op, ScanPropertiesMixin):
         if not hasattr(self, "name") or self.name is None:
             self.name = "scan_fn"
 
-        # to have a fair __eq__ comparison later on, we update the info with
-        # the actual mode used to compile the function and the name of the
-        # function that we set in case none was given
-        self.info = dataclasses.replace(self.info, name=self.name)
-
         # Pre-computing some values to speed up perform
         self.mintaps = [np.min(x) for x in self.tap_array]
         self.mintaps += [0 for x in range(self.n_nit_sot)]
@@ -606,8 +653,9 @@ class Scan(Op, ScanPropertiesMixin):
         self.nit_sot_arg_offset = self.shared_arg_offset + self.n_shared_outs
         self.n_outs = self.n_mit_mot + self.n_mit_sot + self.n_sit_sot
         self.n_tap_outs = self.n_mit_mot + self.n_mit_sot
-        if self.info.gpua:
-            self._hash_inner_graph = self.info.gpu_hash
+
+        if self.gpua:
+            self._hash_inner_graph = self.gpu_hash
         else:
             # Do the missing inputs check here to have the error early.
             for var in graph_inputs(self.outputs, self.inputs):
@@ -1072,6 +1120,24 @@ class Scan(Op, ScanPropertiesMixin):
         if self.info != other.info:
             return False
 
+        if self.gpua != other.gpua:
+            return False
+
+        if self.as_while != other.as_while:
+            return False
+
+        if self.profile != other.profile:
+            return False
+
+        if self.truncate_gradient != other.truncate_gradient:
+            return False
+
+        if self.name != other.name:
+            return False
+
+        if self.allow_gc != other.allow_gc:
+            return False
+
         # Compare inner graphs
         # TODO: Use `self.inner_fgraph == other.inner_fgraph`
         if len(self.inputs) != len(other.inputs):
@@ -1115,7 +1181,19 @@ class Scan(Op, ScanPropertiesMixin):
         return aux_txt
 
     def __hash__(self):
-        return hash((type(self), self._hash_inner_graph, self.info))
+        return hash(
+            (
+                type(self),
+                self._hash_inner_graph,
+                self.info,
+                self.gpua,
+                self.as_while,
+                self.profile,
+                self.truncate_gradient,
+                self.name,
+                self.allow_gc,
+            )
+        )
 
     def make_thunk(self, node, storage_map, compute_map, no_recycling, impl=None):
         """
@@ -2661,18 +2739,12 @@ class Scan(Op, ScanPropertiesMixin):
             n_seqs=len(outer_inp_seqs),
             n_mit_sot=0,
             tap_array=tuple(tuple(v) for v in new_tap_array),
-            gpua=False,
             n_mit_mot=len(outer_inp_mitmot),
             n_mit_mot_outs=n_mitmot_outs,
             mit_mot_out_slices=tuple(tuple(v) for v in mitmot_out_taps),
-            truncate_gradient=self.truncate_gradient,
             n_sit_sot=n_sitsot_outs,
             n_shared_outs=0,
             n_nit_sot=n_nit_sot,
-            as_while=False,
-            profile=self.profile,
-            name=f"grad_of_{self.name}" if self.name else None,
-            allow_gc=self.allow_gc,
         )
 
         outer_inputs = (
@@ -2694,7 +2766,18 @@ class Scan(Op, ScanPropertiesMixin):
         )
         inner_gfn_outs = inner_out_mitmot + inner_out_sitsot + inner_out_nitsot
 
-        local_op = Scan(inner_gfn_ins, inner_gfn_outs, info, self.mode)
+        local_op = Scan(
+            inner_gfn_ins,
+            inner_gfn_outs,
+            info,
+            mode=self.mode,
+            truncate_gradient=self.truncate_gradient,
+            gpua=False,
+            as_while=False,
+            profile=self.profile,
+            name=f"grad_of_{self.name}" if self.name else None,
+            allow_gc=self.allow_gc,
+        )
         outputs = local_op(*outer_inputs)
         if type(outputs) not in (list, tuple):
             outputs = [outputs]
@@ -3013,17 +3096,22 @@ class Scan(Op, ScanPropertiesMixin):
             n_nit_sot=self.n_nit_sot * 2,
             n_shared_outs=self.n_shared_outs,
             n_mit_mot_outs=n_mit_mot_outs * 2,
+            tap_array=tuple(tuple(v) for v in new_tap_array),
+            mit_mot_out_slices=tuple(tuple(v) for v in self.mit_mot_out_slices) * 2,
+        )
+
+        local_op = Scan(
+            inner_ins,
+            inner_outs,
+            info,
+            mode=self.mode,
             gpua=False,
             as_while=self.as_while,
             profile=self.profile,
             truncate_gradient=self.truncate_gradient,
             name=f"rop_of_{self.name}" if self.name else None,
             allow_gc=self.allow_gc,
-            tap_array=tuple(tuple(v) for v in new_tap_array),
-            mit_mot_out_slices=tuple(tuple(v) for v in self.mit_mot_out_slices) * 2,
         )
-
-        local_op = Scan(inner_ins, inner_outs, info, self.mode)
         outputs = local_op(*scan_inputs)
         if type(outputs) not in (list, tuple):
             outputs = [outputs]

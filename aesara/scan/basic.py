@@ -1032,6 +1032,13 @@ def scan(
         n_sit_sot=n_sit_sot,
         n_shared_outs=n_shared_outs,
         n_nit_sot=n_nit_sot,
+    )
+
+    local_op = Scan(
+        inner_inputs,
+        new_outs,
+        info,
+        mode=mode,
         truncate_gradient=truncate_gradient,
         name=name,
         gpua=False,
@@ -1040,8 +1047,6 @@ def scan(
         allow_gc=allow_gc,
         strict=strict,
     )
-
-    local_op = Scan(inner_inputs, new_outs, info, mode)
 
     ##
     # Step 8. Compute the outputs using the scan op
