@@ -299,7 +299,7 @@ If the goal is to navigate between variables that are associated with the same
 states (ex : going from an outer sequence input to the corresponding inner
 sequence input, going from an inner output associated with a recurrent state
 to the inner input(s) associated with that same recurrent state, etc.), then
-the ``var_mappings`` attribute of the scan op can be used.
+the `get_oinp_iinp_iout_oout_mappings_mappings` method of the `Scan` `Op` can be used.
 
 This attribute is a dictionary with 12 {key/value} pairs. The keys are listed
 below :

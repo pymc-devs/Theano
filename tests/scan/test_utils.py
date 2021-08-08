@@ -253,7 +253,6 @@ def test_ScanArgs():
     # here we make sure it doesn't (and that all the inputs are the same)
     assert scan_args.inputs == scan_op.inputs
     assert scan_args.info == scan_op.info
-    assert scan_args.var_mappings == scan_op.var_mappings
 
     # Check that `ScanArgs.find_among_fields` works
     test_v = scan_op.inner_seqs(scan_op.inputs)[1]
