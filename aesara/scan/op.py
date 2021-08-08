@@ -44,11 +44,12 @@ relies on the following elements to work properly :
 """
 
 
-import copy
+import dataclasses
 import itertools
 import logging
 import time
 from collections import OrderedDict
+from typing import Callable, List, Optional, Union
 
 import numpy as np
 
@@ -57,7 +58,7 @@ from aesara import tensor as aet
 from aesara.compile.builders import infer_shape
 from aesara.compile.function import function
 from aesara.compile.io import In, Out
-from aesara.compile.mode import AddFeatureOptimizer, get_mode
+from aesara.compile.mode import AddFeatureOptimizer, Mode, get_default_mode, get_mode
 from aesara.compile.profiling import ScanProfileStats, register_profiler_printer
 from aesara.configdefaults import config
 from aesara.gradient import DisconnectedType, NullType, Rop, grad, grad_undefined
@@ -76,7 +77,7 @@ from aesara.graph.op import Op, ops_with_inner_function
 from aesara.link.c.basic import CLinker
 from aesara.link.c.exceptions import MissingGXX
 from aesara.link.utils import raise_with_op
-from aesara.scan.utils import Validator, forced_replace, hash_listsDictsTuples, safe_new
+from aesara.scan.utils import Validator, forced_replace, safe_new
 from aesara.tensor.basic import as_tensor_variable
 from aesara.tensor.math import minimum
 from aesara.tensor.shape import Shape_i
@@ -88,57 +89,90 @@ from aesara.tensor.var import TensorVariable
 _logger = logging.getLogger("aesara.scan.op")
 
 
+@dataclasses.dataclass(frozen=True)
+class ScanInfo:
+    tap_array: tuple
+    n_seqs: int
+    n_mit_mot: int
+    n_mit_mot_outs: int
+    mit_mot_out_slices: tuple
+    n_mit_sot: int
+    n_sit_sot: int
+    n_shared_outs: int
+    n_nit_sot: int
+    truncate_gradient: bool = False
+    name: Optional[str] = None
+    gpua: bool = False
+    as_while: bool = False
+    profile: Optional[Union[str, bool]] = None
+    allow_gc: bool = True
+    strict: bool = True
+
+
+TensorConstructorType = Callable[[List[bool], Union[str, np.generic]], TensorType]
+
+
 class Scan(Op):
-    """
-
-    Parameters
-    ----------
-    inputs
-        Inputs of the inner function of scan.
-    outputs
-        Outputs of the inner function of scan.
-    info
-        Dictionary containing different properties of the scan op (like number
-        of different types of arguments, name, mode, if it should run on GPU or
-        not, etc.).
-    typeConstructor
-        Function that constructs an equivalent to Aesara TensorType.
-
-    Notes
-    -----
-    ``typeConstructor`` had been added to refactor how
-    Aesara deals with the GPU. If it runs on the GPU, scan needs
-    to construct certain outputs (those who reside in the GPU
-    memory) as the GPU-specific type.  However we can not import
-    gpu code in this file (as it is in sandbox, and not available
-    on each machine) so the workaround is that the GPU
-    optimization passes to the constructor of this class a
-    function that is able to construct a GPU type. This way the
-    class Scan does not need to be aware of the details for the
-    GPU, it just constructs any tensor using this function (which
-    by default constructs normal tensors).
-
-    """
-
     def __init__(
         self,
-        inputs,
-        outputs,
-        info,
-        typeConstructor=None,
+        inputs: List[Variable],
+        outputs: List[Variable],
+        info: ScanInfo,
+        mode: Optional[Mode] = None,
+        typeConstructor: Optional[TensorConstructorType] = None,
     ):
+        r"""
+
+        Parameters
+        ----------
+        inputs
+            Inputs of the inner function of `Scan`.
+        outputs
+            Outputs of the inner function of `Scan`.
+        info
+            Dictionary containing different properties of the `Scan` `Op` (like
+            number of different types of arguments, name, mode, if it should run on
+            GPU or not, etc.).
+        mode
+            The compilation mode for the inner graph.
+        typeConstructor
+            Function that constructs an equivalent to Aesara `TensorType`.
+
+        Notes
+        -----
+        `typeConstructor` had been added to refactor how
+        Aesara deals with the GPU. If it runs on the GPU, scan needs
+        to construct certain outputs (those who reside in the GPU
+        memory) as the GPU-specific type.  However we can not import
+        gpu code in this file (as it is in sandbox, and not available
+        on each machine) so the workaround is that the GPU
+        optimization passes to the constructor of this class a
+        function that is able to construct a GPU type. This way the
+        class `Scan` does not need to be aware of the details for the
+        GPU, it just constructs any tensor using this function (which
+        by default constructs normal tensors).
+
+        """
         # adding properties into self
         self.inputs = inputs
         self.outputs = outputs
-        self.__dict__.update(info)
-        # I keep a version of info in self, to use in __eq__ and __hash__,
-        # since info contains all tunable parameters of the op, so for two
-        # scan to be equal this tunable parameters should be the same
         self.info = info
+        self.__dict__.update(dataclasses.asdict(info))
+
+        # Clone mode_instance, altering "allow_gc" for the linker,
+        # and adding a message if we profile
+        if self.name:
+            message = self.name + " sub profile"
+        else:
+            message = "Scan sub profile"
+
+        self.mode = get_default_mode() if mode is None else mode
+        self.mode_instance = get_mode(self.mode).clone(
+            link_kwargs=dict(allow_gc=self.allow_gc), message=message
+        )
+
         # build a list of output types for any Apply node using this op.
         self.output_types = []
-        idx = 0
-        jdx = 0
 
         def tensorConstructor(broadcastable, dtype):
             return TensorType(broadcastable=broadcastable, dtype=dtype)
@@ -146,6 +180,8 @@ class Scan(Op):
         if typeConstructor is None:
             typeConstructor = tensorConstructor
 
+        idx = 0
+        jdx = 0
         while idx < self.n_mit_mot_outs:
             # Not that for mit_mot there are several output slices per
             # output sequence
@@ -176,24 +212,13 @@ class Scan(Op):
         if self.as_while:
             self.output_types = self.output_types[:-1]
 
-        mode_instance = get_mode(self.mode)
-        # Clone mode_instance, altering "allow_gc" for the linker,
-        # and adding a message if we profile
-        if self.name:
-            message = self.name + " sub profile"
-        else:
-            message = "Scan sub profile"
-
-        self.mode_instance = mode_instance.clone(
-            link_kwargs=dict(allow_gc=self.allow_gc), message=message
-        )
-
         if not hasattr(self, "name") or self.name is None:
             self.name = "scan_fn"
+
         # to have a fair __eq__ comparison later on, we update the info with
         # the actual mode used to compile the function and the name of the
         # function that we set in case none was given
-        self.info["name"] = self.name
+        self.info = dataclasses.replace(self.info, name=self.name)
 
         # Pre-computing some values to speed up perform
         self.mintaps = [np.min(x) for x in self.tap_array]
@@ -205,8 +230,8 @@ class Scan(Op):
         self.nit_sot_arg_offset = self.shared_arg_offset + self.n_shared_outs
         self.n_outs = self.n_mit_mot + self.n_mit_sot + self.n_sit_sot
         self.n_tap_outs = self.n_mit_mot + self.n_mit_sot
-        if self.info["gpua"]:
-            self._hash_inner_graph = self.info["gpu_hash"]
+        if self.info.gpua:
+            self._hash_inner_graph = self.info.gpu_hash
         else:
             # Do the missing inputs check here to have the error early.
             for var in graph_inputs(self.outputs, self.inputs):
@@ -256,7 +281,7 @@ class Scan(Op):
         # output with type GpuArrayType
         from aesara.gpuarray import GpuArrayType
 
-        if not self.info.get("gpua", False):
+        if not self.info.gpua:
             for inp in self.inputs:
                 if isinstance(inp.type, GpuArrayType):
                     raise TypeError(
@@ -279,9 +304,7 @@ class Scan(Op):
 
     def __setstate__(self, d):
         self.__dict__.update(d)
-        if "allow_gc" not in self.__dict__:
-            self.allow_gc = True
-            self.info["allow_gc"] = True
+
         if not hasattr(self, "var_mappings"):
             # Generate the mappings between inner and outer inputs and outputs
             # if they haven't already been generated.
@@ -731,41 +754,20 @@ class Scan(Op):
         return apply_node
 
     def __eq__(self, other):
-        # Check if we are dealing with same type of objects
-        if not type(self) == type(other):
+        if type(self) != type(other):
             return False
-        if "destroy_map" not in self.info:
-            self.info["destroy_map"] = OrderedDict()
-        if "destroy_map" not in other.info:
-            other.info["destroy_map"] = OrderedDict()
-        keys_to_check = [
-            "truncate_gradient",
-            "profile",
-            "n_seqs",
-            "tap_array",
-            "as_while",
-            "n_mit_sot",
-            "destroy_map",
-            "n_nit_sot",
-            "n_shared_outs",
-            "n_sit_sot",
-            "gpua",
-            "n_mit_mot_outs",
-            "n_mit_mot",
-            "mit_mot_out_slices",
-        ]
-        # This are some safety checks ( namely that the inner graph has the
-        # same number of inputs and same number of outputs )
-        if not len(self.inputs) == len(other.inputs):
+
+        if self.info != other.info:
             return False
-        elif not len(self.outputs) == len(other.outputs):
+
+        # Compare inner graphs
+        # TODO: Use `self.inner_fgraph == other.inner_fgraph`
+        if len(self.inputs) != len(other.inputs):
             return False
-        for key in keys_to_check:
-            if self.info[key] != other.info[key]:
-                return False
-        # If everything went OK up to here, there is still one thing to
-        # check. Namely, do the internal graph represent same
-        # computations
+
+        if len(self.outputs) != len(other.outputs):
+            return False
+
         for self_in, other_in in zip(self.inputs, other.inputs):
             if self_in.type != other_in.type:
                 return False
@@ -801,15 +803,7 @@ class Scan(Op):
         return aux_txt
 
     def __hash__(self):
-        return hash(
-            (
-                type(self),
-                # and a hash representing the inner graph using the
-                # CLinker.cmodule_key_
-                self._hash_inner_graph,
-                hash_listsDictsTuples(self.info),
-            )
-        )
+        return hash((type(self), self._hash_inner_graph, self.info))
 
     def make_thunk(self, node, storage_map, compute_map, no_recycling, impl=None):
         """
@@ -864,7 +858,6 @@ class Scan(Op):
             wrapped_inputs = [In(x, borrow=False) for x in self.inputs[: self.n_seqs]]
             new_outputs = [x for x in self.outputs]
             preallocated_mitmot_outs = []
-            new_mit_mot_out_slices = copy.deepcopy(self.mit_mot_out_slices)
 
             input_idx = self.n_seqs
             for mitmot_idx in range(self.n_mit_mot):
@@ -894,7 +887,6 @@ class Scan(Op):
                         )
                         wrapped_inputs.append(wrapped_inp)
                         preallocated_mitmot_outs.append(output_idx)
-                        new_mit_mot_out_slices[mitmot_idx].remove(inp_tap)
                     else:
                         # Wrap the corresponding input as usual. Leave the
                         # output as-is.
@@ -1963,7 +1955,7 @@ class Scan(Op):
         outer_oidx = 0
 
         # Handle sequences inputs
-        for i in range(self.info["n_seqs"]):
+        for i in range(self.info.n_seqs):
             outer_input_indices.append(outer_iidx)
             inner_input_indices.append([inner_iidx])
             inner_output_indices.append([])
@@ -1975,8 +1967,8 @@ class Scan(Op):
             outer_oidx += 0
 
         # Handle mitmots, mitsots and sitsots variables
-        for i in range(len(self.info["tap_array"])):
-            nb_input_taps = len(self.info["tap_array"][i])
+        for i in range(len(self.info.tap_array)):
+            nb_input_taps = len(self.info.tap_array[i])
 
             if i < self.n_mit_mot:
                 nb_output_taps = len(self.mit_mot_out_slices[i])
@@ -1999,7 +1991,7 @@ class Scan(Op):
 
         # This is needed because, for outer inputs (and for outer inputs only)
         # nitsots come *after* shared variables.
-        outer_iidx += self.info["n_shared_outs"]
+        outer_iidx += self.info.n_shared_outs
 
         # Handle nitsots variables
         for i in range(self.n_nit_sot):
@@ -2015,10 +2007,10 @@ class Scan(Op):
 
         # This is needed because, for outer inputs (and for outer inputs only)
         # nitsots come *after* shared variables.
-        outer_iidx -= self.info["n_shared_outs"] + self.n_nit_sot
+        outer_iidx -= self.info.n_shared_outs + self.n_nit_sot
 
         # Handle shared states
-        for i in range(self.info["n_shared_outs"]):
+        for i in range(self.info.n_shared_outs):
             outer_input_indices.append(outer_iidx)
             inner_input_indices.append([inner_iidx])
             inner_output_indices.append([inner_oidx])
@@ -2158,10 +2150,10 @@ class Scan(Op):
                     oidx += 1
                     iidx -= len(taps)
 
-            if iidx < self.info["n_sit_sot"]:
+            if iidx < self.info.n_sit_sot:
                 return oidx + iidx
             else:
-                return oidx + iidx + self.info["n_nit_sot"]
+                return oidx + iidx + self.info.n_nit_sot
 
         def get_out_idx(iidx):
             oidx = 0
@@ -2241,9 +2233,9 @@ class Scan(Op):
             # "if Xt not in self.inner_nitsot_outs(self_outputs)" because
             # the exact same variable can be used as multiple outputs.
             idx_nitsot_start = (
-                self.info["n_mit_mot"] + self.info["n_mit_sot"] + self.info["n_sit_sot"]
+                self.info.n_mit_mot + self.info.n_mit_sot + self.info.n_sit_sot
             )
-            idx_nitsot_end = idx_nitsot_start + self.info["n_nit_sot"]
+            idx_nitsot_end = idx_nitsot_start + self.info.n_nit_sot
             if idx < idx_nitsot_start or idx >= idx_nitsot_end:
                 # What we do here is loop through dC_douts and collect all
                 # those that are connected to the specific one and do an
@@ -2668,27 +2660,23 @@ class Scan(Op):
         n_sitsot_outs = len(outer_inp_sitsot)
         new_tap_array = mitmot_inp_taps + [[-1] for k in range(n_sitsot_outs)]
 
-        info = OrderedDict()
-        info["n_seqs"] = len(outer_inp_seqs)
-        info["n_mit_sot"] = 0
-        info["tap_array"] = new_tap_array
-        info["gpua"] = False
-        info["n_mit_mot"] = len(outer_inp_mitmot)
-        info["n_mit_mot_outs"] = n_mitmot_outs
-        info["mit_mot_out_slices"] = mitmot_out_taps
-        info["truncate_gradient"] = self.truncate_gradient
-        info["n_sit_sot"] = n_sitsot_outs
-        info["n_shared_outs"] = 0
-        info["n_nit_sot"] = n_nit_sot
-        info["as_while"] = False
-        info["profile"] = self.profile
-        info["destroy_map"] = OrderedDict()
-        if self.name:
-            info["name"] = "grad_of_" + self.name
-        else:
-            info["name"] = None
-        info["mode"] = self.mode
-        info["allow_gc"] = self.allow_gc
+        info = ScanInfo(
+            n_seqs=len(outer_inp_seqs),
+            n_mit_sot=0,
+            tap_array=tuple(tuple(v) for v in new_tap_array),
+            gpua=False,
+            n_mit_mot=len(outer_inp_mitmot),
+            n_mit_mot_outs=n_mitmot_outs,
+            mit_mot_out_slices=tuple(tuple(v) for v in mitmot_out_taps),
+            truncate_gradient=self.truncate_gradient,
+            n_sit_sot=n_sitsot_outs,
+            n_shared_outs=0,
+            n_nit_sot=n_nit_sot,
+            as_while=False,
+            profile=self.profile,
+            name=f"grad_of_{self.name}" if self.name else None,
+            allow_gc=self.allow_gc,
+        )
 
         outer_inputs = (
             [grad_steps]
@@ -2709,7 +2697,7 @@ class Scan(Op):
         )
         inner_gfn_outs = inner_out_mitmot + inner_out_sitsot + inner_out_nitsot
 
-        local_op = Scan(inner_gfn_ins, inner_gfn_outs, info)
+        local_op = Scan(inner_gfn_ins, inner_gfn_outs, info, self.mode)
         outputs = local_op(*outer_inputs)
         if type(outputs) not in (list, tuple):
             outputs = [outputs]
@@ -2852,8 +2840,8 @@ class Scan(Op):
             rop_self_outputs = self_outputs[:-1]
         else:
             rop_self_outputs = self_outputs
-        if self.info["n_shared_outs"] > 0:
-            rop_self_outputs = rop_self_outputs[: -self.info["n_shared_outs"]]
+        if self.info.n_shared_outs > 0:
+            rop_self_outputs = rop_self_outputs[: -self.info.n_shared_outs]
         rop_outs = Rop(rop_self_outputs, rop_of_inputs, inner_eval_points)
         if type(rop_outs) not in (list, tuple):
             rop_outs = [rop_outs]
@@ -2867,25 +2855,7 @@ class Scan(Op):
         # The only exception is the eval point for the number of sequences, and
         # evan point for the number of nit_sot which I think should just be
         # ignored (?)
-        info = OrderedDict()
-        info["n_seqs"] = self.n_seqs * 2
-        info["n_mit_sot"] = self.n_mit_sot * 2
-        info["n_sit_sot"] = self.n_sit_sot * 2
-        info["n_mit_mot"] = self.n_mit_mot * 2
-        info["n_nit_sot"] = self.n_nit_sot * 2
-        info["n_shared_outs"] = self.n_shared_outs
-        info["gpua"] = False
-        info["as_while"] = self.as_while
-        info["profile"] = self.profile
-        info["truncate_gradient"] = self.truncate_gradient
-        if self.name:
-            info["name"] = "rop_of_" + self.name
-        else:
-            info["name"] = None
-        info["mode"] = self.mode
-        info["allow_gc"] = self.allow_gc
-        info["mit_mot_out_slices"] = self.mit_mot_out_slices * 2
-        info["destroy_map"] = OrderedDict()
+
         new_tap_array = []
         b = 0
         e = self.n_mit_mot
@@ -2896,7 +2866,6 @@ class Scan(Op):
         b = e
         e += self.n_sit_sot
         new_tap_array += self.tap_array[b:e] * 2
-        info["tap_array"] = new_tap_array
 
         # Sequences ...
         b = 1
@@ -2993,7 +2962,7 @@ class Scan(Op):
 
         # Outputs
         n_mit_mot_outs = int(np.sum([len(x) for x in self.mit_mot_out_slices]))
-        info["n_mit_mot_outs"] = n_mit_mot_outs * 2
+
         b = 0
         e = n_mit_mot_outs
         inner_out_mit_mot = self_outputs[b:e] + rop_outs[b:e]
@@ -3039,7 +3008,25 @@ class Scan(Op):
             + scan_other
         )
 
-        local_op = Scan(inner_ins, inner_outs, info)
+        info = ScanInfo(
+            n_seqs=self.n_seqs * 2,
+            n_mit_sot=self.n_mit_sot * 2,
+            n_sit_sot=self.n_sit_sot * 2,
+            n_mit_mot=self.n_mit_mot * 2,
+            n_nit_sot=self.n_nit_sot * 2,
+            n_shared_outs=self.n_shared_outs,
+            n_mit_mot_outs=n_mit_mot_outs * 2,
+            gpua=False,
+            as_while=self.as_while,
+            profile=self.profile,
+            truncate_gradient=self.truncate_gradient,
+            name=f"rop_of_{self.name}" if self.name else None,
+            allow_gc=self.allow_gc,
+            tap_array=tuple(tuple(v) for v in new_tap_array),
+            mit_mot_out_slices=tuple(tuple(v) for v in self.mit_mot_out_slices) * 2,
+        )
+
+        local_op = Scan(inner_ins, inner_outs, info, self.mode)
         outputs = local_op(*scan_inputs)
         if type(outputs) not in (list, tuple):
             outputs = [outputs]

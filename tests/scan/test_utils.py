@@ -252,10 +252,7 @@ def test_ScanArgs():
     # The `scan_args` base class always clones the inner-graph;
     # here we make sure it doesn't (and that all the inputs are the same)
     assert scan_args.inputs == scan_op.inputs
-    scan_op_info = dict(scan_op.info)
-    # The `ScanInfo` dictionary has the wrong order and an extra entry
-    del scan_op_info["strict"]
-    assert dict(scan_args.info) == scan_op_info
+    assert scan_args.info == scan_op.info
     assert scan_args.var_mappings == scan_op.var_mappings
 
     # Check that `ScanArgs.find_among_fields` works

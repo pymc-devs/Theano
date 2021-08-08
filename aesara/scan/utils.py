@@ -1,6 +1,7 @@
 """This module provides utility functions for the `Scan` `Op`."""
 
 import copy
+import dataclasses
 import logging
 import warnings
 from collections import OrderedDict, namedtuple
@@ -157,21 +158,6 @@ def traverse(out, x, x_copy, d, visited=None):
         return d
 
 
-# Hashing a dictionary/list/tuple by xoring the hash of each element
-def hash_listsDictsTuples(x):
-    hash_value = 0
-    if isinstance(x, dict):
-        for k, v in x.items():
-            hash_value ^= hash_listsDictsTuples(k)
-            hash_value ^= hash_listsDictsTuples(v)
-    elif isinstance(x, (list, tuple)):
-        for v in x:
-            hash_value ^= hash_listsDictsTuples(v)
-    else:
-        hash_value ^= hash(x)
-    return hash_value
-
-
 def map_variables(replacer, graphs, additional_inputs=None):
     """Construct new graphs based on 'graphs' with some variables replaced
     according to 'replacer'.
@@ -264,6 +250,7 @@ def map_variables(replacer, graphs, additional_inputs=None):
                     new_inner_inputs,
                     new_inner_outputs,
                     node.op.info,
+                    node.op.mode,
                     # FIXME: infer this someday?
                     typeConstructor=None,
                 )
@@ -669,7 +656,7 @@ def scan_can_remove_outs(op, out_idxs):
     offset = op.n_seqs
     lim = op.n_mit_mot + op.n_mit_sot + op.n_sit_sot
     for idx in range(lim):
-        n_ins = len(op.info["tap_array"][idx])
+        n_ins = len(op.info.tap_array[idx])
         out_ins += [op.inputs[offset : offset + n_ins]]
         offset += n_ins
     out_ins += [[] for k in range(op.n_nit_sot)]
@@ -702,23 +689,25 @@ def compress_outs(op, not_required, inputs):
     node inputs, and changing the dictionary.
 
     """
-    info = OrderedDict()
-    info["tap_array"] = []
-    info["n_seqs"] = op.info["n_seqs"]
-    info["n_mit_mot"] = 0
-    info["n_mit_mot_outs"] = 0
-    info["mit_mot_out_slices"] = []
-    info["n_mit_sot"] = 0
-    info["n_sit_sot"] = 0
-    info["n_shared_outs"] = 0
-    info["n_nit_sot"] = 0
-    info["truncate_gradient"] = op.info["truncate_gradient"]
-    info["name"] = op.info["name"]
-    info["gpua"] = op.info["gpua"]
-    info["mode"] = op.info["mode"]
-    info["as_while"] = op.info["as_while"]
-    info["profile"] = op.info["profile"]
-    info["allow_gc"] = op.info["allow_gc"]
+    from aesara.scan.op import ScanInfo
+
+    info = ScanInfo(
+        tap_array=(),
+        n_seqs=op.info.n_seqs,
+        n_mit_mot=0,
+        n_mit_mot_outs=0,
+        mit_mot_out_slices=(),
+        n_mit_sot=0,
+        n_sit_sot=0,
+        n_shared_outs=0,
+        n_nit_sot=0,
+        truncate_gradient=op.info.truncate_gradient,
+        name=op.info.name,
+        gpua=op.info.gpua,
+        as_while=op.info.as_while,
+        profile=op.info.profile,
+        allow_gc=op.info.allow_gc,
+    )
 
     op_inputs = op.inputs[: op.n_seqs]
     op_outputs = []
@@ -730,13 +719,17 @@ def compress_outs(op, not_required, inputs):
     i_offset = op.n_seqs
     o_offset = 0
     curr_pos = 0
-    for idx in range(op.info["n_mit_mot"]):
+    for idx in range(op.info.n_mit_mot):
         if offset + idx not in not_required:
             map_old_new[offset + idx] = curr_pos
             curr_pos += 1
-            info["n_mit_mot"] += 1
-            info["tap_array"] += [op.tap_array[offset + idx]]
-            info["mit_mot_out_slices"] += [op.mit_mot_out_slices[offset + idx]]
+            info = dataclasses.replace(
+                info,
+                n_mit_mot=info.n_mit_mot + 1,
+                tap_array=info.tap_array + (tuple(op.tap_array[offset + idx]),),
+                mit_mot_out_slices=info.mit_mot_out_slices
+                + (tuple(op.mit_mot_out_slices[offset + idx]),),
+            )
             # input taps
             for jdx in op.tap_array[offset + idx]:
                 op_inputs += [op.inputs[i_offset]]
@@ -750,16 +743,19 @@ def compress_outs(op, not_required, inputs):
         else:
             o_offset += len(op.mit_mot_out_slices[offset + idx])
             i_offset += len(op.tap_array[offset + idx])
-    info["n_mit_mot_outs"] = len(op_outputs)
+    info = dataclasses.replace(info, n_mit_mot_outs=len(op_outputs))
     offset += op.n_mit_mot
     ni_offset += op.n_mit_mot
 
-    for idx in range(op.info["n_mit_sot"]):
+    for idx in range(op.info.n_mit_sot):
         if offset + idx not in not_required:
             map_old_new[offset + idx] = curr_pos
             curr_pos += 1
-            info["n_mit_sot"] += 1
-            info["tap_array"] += [op.tap_array[offset + idx]]
+            info = dataclasses.replace(
+                info,
+                n_mit_sot=info.n_mit_sot + 1,
+                tap_array=info.tap_array + (tuple(op.tap_array[offset + idx]),),
+            )
             # input taps
             for jdx in op.tap_array[offset + idx]:
                 op_inputs += [op.inputs[i_offset]]
@@ -775,12 +771,15 @@ def compress_outs(op, not_required, inputs):
 
     offset += op.n_mit_sot
     ni_offset += op.n_mit_sot
-    for idx in range(op.info["n_sit_sot"]):
+    for idx in range(op.info.n_sit_sot):
         if offset + idx not in not_required:
             map_old_new[offset + idx] = curr_pos
             curr_pos += 1
-            info["n_sit_sot"] += 1
-            info["tap_array"] += [op.tap_array[offset + idx]]
+            info = dataclasses.replace(
+                info,
+                n_sit_sot=info.n_sit_sot + 1,
+                tap_array=info.tap_array + (tuple(op.tap_array[offset + idx]),),
+            )
             # input taps
             op_inputs += [op.inputs[i_offset]]
             i_offset += 1
@@ -796,11 +795,11 @@ def compress_outs(op, not_required, inputs):
     offset += op.n_sit_sot
     ni_offset += op.n_sit_sot
     nit_sot_ins = []
-    for idx in range(op.info["n_nit_sot"]):
+    for idx in range(op.info.n_nit_sot):
         if offset + idx not in not_required:
             map_old_new[offset + idx] = curr_pos
             curr_pos += 1
-            info["n_nit_sot"] += 1
+            info = dataclasses.replace(info, n_nit_sot=info.n_nit_sot + 1)
             op_outputs += [op.outputs[o_offset]]
             o_offset += 1
             nit_sot_ins += [inputs[ni_offset + idx + op.n_shared_outs]]
@@ -809,11 +808,11 @@ def compress_outs(op, not_required, inputs):
 
     offset += op.n_nit_sot
     shared_ins = []
-    for idx in range(op.info["n_shared_outs"]):
+    for idx in range(op.info.n_shared_outs):
         if offset + idx not in not_required:
             map_old_new[offset + idx] = curr_pos
             curr_pos += 1
-            info["n_shared_outs"] += 1
+            info = dataclasses.replace(info, n_shared_outs=info.n_shared_outs + 1)
             op_outputs += [op.outputs[o_offset]]
             o_offset += 1
             op_inputs += [op.inputs[i_offset]]
@@ -896,7 +895,7 @@ class ScanArgs:
         else:
             rval = (_inner_inputs, _inner_outputs)
 
-        if info["as_while"]:
+        if info.as_while:
             self.cond = [rval[1][-1]]
             inner_outputs = rval[1][:-1]
         else:
@@ -907,17 +906,17 @@ class ScanArgs:
         p = 1
         q = 0
 
-        n_seqs = info["n_seqs"]
+        n_seqs = info.n_seqs
         self.outer_in_seqs = outer_inputs[p : p + n_seqs]
         self.inner_in_seqs = inner_inputs[q : q + n_seqs]
         p += n_seqs
         q += n_seqs
 
-        n_mit_mot = info["n_mit_mot"]
-        n_mit_sot = info["n_mit_sot"]
+        n_mit_mot = info.n_mit_mot
+        n_mit_sot = info.n_mit_sot
 
-        self.mit_mot_in_slices = info["tap_array"][:n_mit_mot]
-        self.mit_sot_in_slices = info["tap_array"][n_mit_mot : n_mit_mot + n_mit_sot]
+        self.mit_mot_in_slices = info.tap_array[:n_mit_mot]
+        self.mit_sot_in_slices = info.tap_array[n_mit_mot : n_mit_mot + n_mit_sot]
 
         n_mit_mot_ins = sum(len(s) for s in self.mit_mot_in_slices)
         n_mit_sot_ins = sum(len(s) for s in self.mit_sot_in_slices)
@@ -943,19 +942,19 @@ class ScanArgs:
         self.outer_in_mit_sot = outer_inputs[p : p + n_mit_sot]
         p += n_mit_sot
 
-        n_sit_sot = info["n_sit_sot"]
+        n_sit_sot = info.n_sit_sot
         self.outer_in_sit_sot = outer_inputs[p : p + n_sit_sot]
         self.inner_in_sit_sot = inner_inputs[q : q + n_sit_sot]
         p += n_sit_sot
         q += n_sit_sot
 
-        n_shared_outs = info["n_shared_outs"]
+        n_shared_outs = info.n_shared_outs
         self.outer_in_shared = outer_inputs[p : p + n_shared_outs]
         self.inner_in_shared = inner_inputs[q : q + n_shared_outs]
         p += n_shared_outs
         q += n_shared_outs
 
-        n_nit_sot = info["n_nit_sot"]
+        n_nit_sot = info.n_nit_sot
         self.outer_in_nit_sot = outer_inputs[p : p + n_nit_sot]
         p += n_nit_sot
 
@@ -966,14 +965,14 @@ class ScanArgs:
         p = 0
         q = 0
 
-        self.mit_mot_out_slices = info["mit_mot_out_slices"]
-        n_mit_mot_outs = info["n_mit_mot_outs"]
+        self.mit_mot_out_slices = info.mit_mot_out_slices
+        n_mit_mot_outs = info.n_mit_mot_outs
         self.outer_out_mit_mot = outer_outputs[p : p + n_mit_mot]
         iomm = inner_outputs[q : q + n_mit_mot_outs]
-        self.inner_out_mit_mot = []
+        self.inner_out_mit_mot = ()
         qq = 0
         for sl in self.mit_mot_out_slices:
-            self.inner_out_mit_mot.append(iomm[qq : qq + len(sl)])
+            self.inner_out_mit_mot += (iomm[qq : qq + len(sl)],)
             qq += len(sl)
         p += n_mit_mot
         q += n_mit_mot_outs
@@ -1001,19 +1000,17 @@ class ScanArgs:
         assert p == len(outer_outputs)
         assert q == len(inner_outputs)
 
-        self.other_info = OrderedDict()
-        for k in (
-            "truncate_gradient",
-            "name",
-            "mode",
-            "destroy_map",
-            "gpua",
-            "as_while",
-            "profile",
-            "allow_gc",
-        ):
-            if k in info:
-                self.other_info[k] = info[k]
+        self.other_info = {
+            k: getattr(info, k)
+            for k in (
+                "truncate_gradient",
+                "name",
+                "gpua",
+                "as_while",
+                "profile",
+                "allow_gc",
+            )
+        }
 
     @staticmethod
     def from_node(node, clone=False):
@@ -1032,26 +1029,24 @@ class ScanArgs:
 
     @classmethod
     def create_empty(cls):
-        info = OrderedDict(
-            [
-                ("n_seqs", 0),
-                ("n_mit_mot", 0),
-                ("n_mit_sot", 0),
-                ("tap_array", []),
-                ("n_sit_sot", 0),
-                ("n_nit_sot", 0),
-                ("n_shared_outs", 0),
-                ("n_mit_mot_outs", 0),
-                ("mit_mot_out_slices", []),
-                ("truncate_gradient", -1),
-                ("name", None),
-                ("mode", None),
-                ("destroy_map", OrderedDict()),
-                ("gpua", False),
-                ("as_while", False),
-                ("profile", False),
-                ("allow_gc", False),
-            ]
+        from aesara.scan.op import ScanInfo
+
+        info = ScanInfo(
+            n_seqs=0,
+            n_mit_mot=0,
+            n_mit_sot=0,
+            tap_array=(),
+            n_sit_sot=0,
+            n_nit_sot=0,
+            n_shared_outs=0,
+            n_mit_mot_outs=0,
+            mit_mot_out_slices=(),
+            truncate_gradient=-1,
+            name=None,
+            gpua=False,
+            as_while=False,
+            profile=False,
+            allow_gc=False,
         )
         res = cls([1], [], [], [], info)
         res.n_steps = None
@@ -1060,7 +1055,7 @@ class ScanArgs:
     @property
     def n_nit_sot(self):
         # This is just a hack that allows us to use `Scan.get_oinp_iinp_iout_oout_mappings`
-        return self.info["n_nit_sot"]
+        return self.info.n_nit_sot
 
     @property
     def inputs(self):
@@ -1070,7 +1065,7 @@ class ScanArgs:
     @property
     def n_mit_mot(self):
         # This is just a hack that allows us to use `Scan.get_oinp_iinp_iout_oout_mappings`
-        return self.info["n_mit_mot"]
+        return self.info.n_mit_mot
 
     @property
     def var_mappings(self):
@@ -1141,20 +1136,22 @@ class ScanArgs:
 
     @property
     def info(self):
-        return OrderedDict(
+        from aesara.scan.op import ScanInfo
+
+        return ScanInfo(
             n_seqs=len(self.outer_in_seqs),
             n_mit_mot=len(self.outer_in_mit_mot),
             n_mit_sot=len(self.outer_in_mit_sot),
             tap_array=(
-                self.mit_mot_in_slices
-                + self.mit_sot_in_slices
-                + [[-1]] * len(self.inner_in_sit_sot)
+                tuple(tuple(v) for v in self.mit_mot_in_slices)
+                + tuple(tuple(v) for v in self.mit_sot_in_slices)
+                + ((-1,),) * len(self.inner_in_sit_sot)
             ),
             n_sit_sot=len(self.outer_in_sit_sot),
             n_nit_sot=len(self.outer_in_nit_sot),
             n_shared_outs=len(self.outer_in_shared),
             n_mit_mot_outs=sum(len(s) for s in self.mit_mot_out_slices),
-            mit_mot_out_slices=self.mit_mot_out_slices,
+            mit_mot_out_slices=tuple(self.mit_mot_out_slices),
             **self.other_info,
         )
 

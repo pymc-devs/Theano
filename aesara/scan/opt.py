@@ -51,8 +51,8 @@ scan_eqopt2 -> They are all global optimizer. (in2out convert local to global).
 """
 
 import copy
+import dataclasses
 import logging
-from collections import OrderedDict
 from sys import maxsize
 
 import numpy as np
@@ -78,7 +78,7 @@ from aesara.graph.fg import InconsistencyError
 from aesara.graph.op import compute_test_value
 from aesara.graph.opt import GlobalOptimizer, in2out, local_optimizer
 from aesara.graph.optdb import EquilibriumDB, SequenceDB
-from aesara.scan.op import Scan
+from aesara.scan.op import Scan, ScanInfo
 from aesara.scan.utils import (
     ScanArgs,
     compress_outs,
@@ -156,7 +156,7 @@ def remove_constants_and_unused_inputs_scan(fgraph, node):
     out_stuff_outer = node.inputs[1 + op.n_seqs : st]
 
     # To replace constants in the outer graph by clones in the inner graph
-    givens = OrderedDict()
+    givens = {}
     # All the inputs of the inner graph of the new scan
     nw_inner = []
     # Same for the outer graph, initialized w/ number of steps
@@ -217,12 +217,10 @@ def remove_constants_and_unused_inputs_scan(fgraph, node):
 
     if len(nw_inner) != len(op_ins):
         op_outs = clone_replace(op_outs, replace=givens)
-        nw_info = copy.deepcopy(op.info)
-        nw_info["n_seqs"] = nw_n_seqs
-        # DEBUG CHECK
-        nwScan = Scan(nw_inner, op_outs, nw_info)
+        nw_info = dataclasses.replace(op.info, n_seqs=nw_n_seqs)
+        nwScan = Scan(nw_inner, op_outs, nw_info, op.mode)
         nw_outs = nwScan(*nw_outer, **dict(return_list=True))
-        return OrderedDict([("remove", [node])] + list(zip(node.outputs, nw_outs)))
+        return dict([("remove", [node])] + list(zip(node.outputs, nw_outs)))
     else:
         return False
 
@@ -263,7 +261,7 @@ class PushOutNonSeqScan(GlobalOptimizer):
 
         to_remove_set = set()
         to_replace_set = set()
-        to_replace_map = OrderedDict()
+        to_replace_map = {}
 
         def add_to_replace(y):
             to_replace_set.add(y)
@@ -377,7 +375,7 @@ class PushOutNonSeqScan(GlobalOptimizer):
 
         if len(clean_to_replace) > 0:
             # We can finally put an end to all this madness
-            givens = OrderedDict()
+            givens = {}
             nw_outer = []
             nw_inner = []
             for to_repl, repl_in, repl_out in zip(
@@ -394,7 +392,7 @@ class PushOutNonSeqScan(GlobalOptimizer):
             op_ins = clean_inputs + nw_inner
 
             # Reconstruct node
-            nwScan = Scan(op_ins, op_outs, op.info)
+            nwScan = Scan(op_ins, op_outs, op.info, op.mode)
 
             # Do not call make_node for test_value
             nw_node = nwScan(*(node.inputs + nw_outer), **dict(return_list=True))[
@@ -409,7 +407,7 @@ class PushOutNonSeqScan(GlobalOptimizer):
             return True
         elif not to_keep_set:
             # Nothing in the inner graph should be kept
-            replace_with = OrderedDict()
+            replace_with = {}
             for out, idx in to_replace_map.items():
                 if out in local_fgraph_outs_set:
                     x = node.outputs[local_fgraph_outs_map[out]]
@@ -481,7 +479,7 @@ class PushOutSeqScan(GlobalOptimizer):
 
         to_remove_set = set()
         to_replace_set = set()
-        to_replace_map = OrderedDict()
+        to_replace_map = {}
 
         def add_to_replace(y):
             to_replace_set.add(y)
@@ -638,7 +636,7 @@ class PushOutSeqScan(GlobalOptimizer):
 
         if len(clean_to_replace) > 0:
             # We can finally put an end to all this madness
-            givens = OrderedDict()
+            givens = {}
             nw_outer = []
             nw_inner = []
             for to_repl, repl_in, repl_out in zip(
@@ -656,9 +654,10 @@ class PushOutSeqScan(GlobalOptimizer):
             op_ins = nw_inner + clean_inputs
 
             # Reconstruct node
-            nw_info = op.info.copy()
-            nw_info["n_seqs"] += len(nw_inner)
-            nwScan = Scan(op_ins, op_outs, nw_info)
+            nw_info = dataclasses.replace(
+                op.info, n_seqs=op.info.n_seqs + len(nw_inner)
+            )
+            nwScan = Scan(op_ins, op_outs, nw_info, op.mode)
             # Do not call make_node for test_value
             nw_node = nwScan(
                 *(node.inputs[:1] + nw_outer + node.inputs[1:]),
@@ -673,7 +672,7 @@ class PushOutSeqScan(GlobalOptimizer):
             return True
         elif not to_keep_set and not op.as_while and not op.outer_mitmot(node):
             # Nothing in the inner graph should be kept
-            replace_with = OrderedDict()
+            replace_with = {}
             for out, idx in to_replace_map.items():
                 if out in local_fgraph_outs_set:
                     x = node.outputs[local_fgraph_outs_map[out]]
@@ -937,7 +936,10 @@ class PushOutScanOutput(GlobalOptimizer):
 
         # Create the `Scan` `Op` from the `ScanArgs`
         new_scan_op = Scan(
-            new_scan_args.inner_inputs, new_scan_args.inner_outputs, new_scan_args.info
+            new_scan_args.inner_inputs,
+            new_scan_args.inner_outputs,
+            new_scan_args.info,
+            old_scan_node.op.mode,
         )
 
         # Create the Apply node for the scan op
@@ -1000,13 +1002,6 @@ class ScanInplaceOptimizer(GlobalOptimizer):
 
         op = node.op
 
-        info = copy.deepcopy(op.info)
-        if "destroy_map" not in info:
-            info["destroy_map"] = OrderedDict()
-
-        for out_idx in output_indices:
-            info["destroy_map"][out_idx] = [out_idx + 1 + op.info["n_seqs"]]
-
         # inputs corresponding to sequences and n_steps
         ls_begin = node.inputs[: 1 + op.n_seqs]
         ls = op.outer_mitmot(node.inputs)
@@ -1048,7 +1043,15 @@ class ScanInplaceOptimizer(GlobalOptimizer):
         else:
             typeConstructor = self.typeInfer(node)
 
-        new_op = Scan(op.inputs, op.outputs, info, typeConstructor=typeConstructor)
+        new_op = Scan(
+            op.inputs, op.outputs, op.info, op.mode, typeConstructor=typeConstructor
+        )
+
+        destroy_map = op.destroy_map.copy()
+        for out_idx in output_indices:
+            destroy_map[out_idx] = [out_idx + 1 + op.info.n_seqs]
+
+        new_op.destroy_map = destroy_map
 
         # Do not call make_node for test_value
         new_outs = new_op(*inputs, **dict(return_list=True))
@@ -1070,7 +1073,7 @@ class ScanInplaceOptimizer(GlobalOptimizer):
         scan_nodes = [
             x
             for x in nodes
-            if (isinstance(x.op, Scan) and x.op.info["gpua"] == self.gpua_flag)
+            if (isinstance(x.op, Scan) and x.op.info.gpua == self.gpua_flag)
         ]
         for scan_idx in range(len(scan_nodes)):
 
@@ -1080,7 +1083,7 @@ class ScanInplaceOptimizer(GlobalOptimizer):
             # them.
             original_node = scan_nodes[scan_idx]
             op = original_node.op
-            n_outs = op.info["n_mit_mot"] + op.info["n_mit_sot"] + op.info["n_sit_sot"]
+            n_outs = op.info.n_mit_mot + op.info.n_mit_sot + op.info.n_sit_sot
 
             # Generate a list of outputs on which the node could potentially
             # operate inplace.
@@ -1171,7 +1174,7 @@ class ScanSaveMem(GlobalOptimizer):
             # Each access to shape_of is in a try..except block in order to
             # use a default version when the variable is not in the shape_of
             # dictionary.
-            shape_of = OrderedDict()
+            shape_of = {}
         # 1. Initialization of variables
         # Note 1) We do not actually care about outputs representing shared
         # variables (those have no intermediate values) so it is safer to
@@ -1548,7 +1551,7 @@ class ScanSaveMem(GlobalOptimizer):
             (inps, outs, info, node_ins, compress_map) = compress_outs(
                 op, not_required, nw_inputs
             )
-            inv_compress_map = OrderedDict()
+            inv_compress_map = {}
             for k, v in compress_map.items():
                 inv_compress_map[v] = k
 
@@ -1559,7 +1562,9 @@ class ScanSaveMem(GlobalOptimizer):
                 return
 
             # Do not call make_node for test_value
-            new_outs = Scan(inps, outs, info)(*node_ins, **dict(return_list=True))
+            new_outs = Scan(inps, outs, info, op.mode)(
+                *node_ins, **dict(return_list=True)
+            )
 
             old_new = []
             # 3.7 Get replace pairs for those outputs that do not change
@@ -1688,24 +1693,6 @@ class ScanMerge(GlobalOptimizer):
         else:
             as_while = False
 
-        info = OrderedDict()
-        info["tap_array"] = []
-        info["n_seqs"] = sum([nd.op.n_seqs for nd in nodes])
-        info["n_mit_mot"] = sum([nd.op.n_mit_mot for nd in nodes])
-        info["n_mit_mot_outs"] = sum([nd.op.n_mit_mot_outs for nd in nodes])
-        info["mit_mot_out_slices"] = []
-        info["n_mit_sot"] = sum([nd.op.n_mit_sot for nd in nodes])
-        info["n_sit_sot"] = sum([nd.op.n_sit_sot for nd in nodes])
-        info["n_shared_outs"] = sum([nd.op.n_shared_outs for nd in nodes])
-        info["n_nit_sot"] = sum([nd.op.n_nit_sot for nd in nodes])
-        info["truncate_gradient"] = nodes[0].op.truncate_gradient
-        info["name"] = "&".join([nd.op.name for nd in nodes])
-        info["mode"] = nodes[0].op.mode
-        info["gpua"] = False
-        info["as_while"] = as_while
-        info["profile"] = nodes[0].op.profile
-        info["allow_gc"] = nodes[0].op.allow_gc
-
         # We keep the inner_ins and inner_outs of each original node separated.
         # To be able to recombine them in the right order after the clone,
         # we also need to split them by types (seq, mitmot, ...).
@@ -1725,12 +1712,15 @@ class ScanMerge(GlobalOptimizer):
             inner_ins[idx].append(rename(nd.op.inner_seqs(nd.op.inputs), idx))
             outer_ins += rename(nd.op.outer_seqs(nd.inputs), idx)
 
+        tap_array = ()
+        mit_mot_out_slices = ()
+
         for idx, nd in enumerate(nodes):
             # MitMot
             inner_ins[idx].append(rename(nd.op.inner_mitmot(nd.op.inputs), idx))
             inner_outs[idx].append(nd.op.inner_mitmot_outs(nd.op.outputs))
-            info["tap_array"] += nd.op.mitmot_taps()
-            info["mit_mot_out_slices"] += nd.op.mitmot_out_taps()
+            tap_array += nd.op.mitmot_taps()
+            mit_mot_out_slices += nd.op.mitmot_out_taps()
             outer_ins += rename(nd.op.outer_mitmot(nd.inputs), idx)
             outer_outs += nd.op.outer_mitmot_outs(nd.outputs)
 
@@ -1738,14 +1728,14 @@ class ScanMerge(GlobalOptimizer):
             # MitSot
             inner_ins[idx].append(rename(nd.op.inner_mitsot(nd.op.inputs), idx))
             inner_outs[idx].append(nd.op.inner_mitsot_outs(nd.op.outputs))
-            info["tap_array"] += nd.op.mitsot_taps()
+            tap_array += nd.op.mitsot_taps()
             outer_ins += rename(nd.op.outer_mitsot(nd.inputs), idx)
             outer_outs += nd.op.outer_mitsot_outs(nd.outputs)
 
         for idx, nd in enumerate(nodes):
             # SitSot
             inner_ins[idx].append(rename(nd.op.inner_sitsot(nd.op.inputs), idx))
-            info["tap_array"] += [[-1] for x in range(nd.op.n_sit_sot)]
+            tap_array += tuple((-1,) for x in range(nd.op.n_sit_sot))
             inner_outs[idx].append(nd.op.inner_sitsot_outs(nd.op.outputs))
             outer_ins += rename(nd.op.outer_sitsot(nd.inputs), idx)
             outer_outs += nd.op.outer_sitsot_outs(nd.outputs)
@@ -1834,7 +1824,25 @@ class ScanMerge(GlobalOptimizer):
                 else:
                     new_inner_outs += inner_outs[idx][gr_idx]
 
-        new_op = Scan(new_inner_ins, new_inner_outs, info)
+        info = ScanInfo(
+            tap_array=tap_array,
+            n_seqs=sum([nd.op.n_seqs for nd in nodes]),
+            n_mit_mot=sum([nd.op.n_mit_mot for nd in nodes]),
+            n_mit_mot_outs=sum([nd.op.n_mit_mot_outs for nd in nodes]),
+            mit_mot_out_slices=mit_mot_out_slices,
+            n_mit_sot=sum([nd.op.n_mit_sot for nd in nodes]),
+            n_sit_sot=sum([nd.op.n_sit_sot for nd in nodes]),
+            n_shared_outs=sum([nd.op.n_shared_outs for nd in nodes]),
+            n_nit_sot=sum([nd.op.n_nit_sot for nd in nodes]),
+            truncate_gradient=nodes[0].op.truncate_gradient,
+            name="&".join([nd.op.name for nd in nodes]),
+            gpua=False,
+            as_while=as_while,
+            profile=nodes[0].op.profile,
+            allow_gc=nodes[0].op.allow_gc,
+        )
+
+        new_op = Scan(new_inner_ins, new_inner_outs, info, nodes[0].op.mode)
         new_outs = new_op(*outer_ins)
 
         if not isinstance(new_outs, (list, tuple)):
@@ -1932,7 +1940,7 @@ def make_equiv(lo, li):
     the equivalence of their corresponding outer inputs.
 
     """
-    seeno = OrderedDict()
+    seeno = {}
     left = []
     right = []
     for o, i in zip(lo, li):
@@ -1956,7 +1964,7 @@ def scan_merge_inouts(fgraph, node):
         node.inputs, node.outputs, node.op.inputs, node.op.outputs, node.op.info
     )
 
-    inp_equiv = OrderedDict()
+    inp_equiv = {}
 
     if has_duplicates(a.outer_in_seqs):
         new_outer_seqs = []
@@ -1992,7 +2000,7 @@ def scan_merge_inouts(fgraph, node):
         a_inner_outs = a.inner_outputs
         inner_outputs = clone_replace(a_inner_outs, replace=inp_equiv)
 
-        op = Scan(inner_inputs, inner_outputs, info)
+        op = Scan(inner_inputs, inner_outputs, info, node.op.mode)
         outputs = op(*outer_inputs)
 
         if not isinstance(outputs, (list, tuple)):
@@ -2019,7 +2027,7 @@ def scan_merge_inouts(fgraph, node):
         left += _left
         right += _right
     if has_duplicates(na.outer_in_mit_mot):
-        seen = OrderedDict()
+        seen = {}
         for omm, imm, _sl in zip(
             na.outer_in_mit_mot, na.inner_in_mit_mot, na.mit_mot_in_slices
         ):
@@ -2032,7 +2040,7 @@ def scan_merge_inouts(fgraph, node):
                 seen[(omm, sl)] = imm
 
     if has_duplicates(na.outer_in_mit_sot):
-        seen = OrderedDict()
+        seen = {}
         for oms, ims, _sl in zip(
             na.outer_in_mit_sot, na.inner_in_mit_sot, na.mit_sot_in_slices
         ):
@@ -2117,9 +2125,7 @@ def scan_merge_inouts(fgraph, node):
             new_outer_out_mit_mot.append(outer_omm)
     na.outer_out_mit_mot = new_outer_out_mit_mot
     if remove:
-        return OrderedDict(
-            [("remove", remove)] + list(zip(node.outputs, na.outer_outputs))
-        )
+        return dict([("remove", remove)] + list(zip(node.outputs, na.outer_outputs)))
     return na.outer_outputs
 
 
@@ -2214,15 +2220,17 @@ class PushOutDot1(GlobalOptimizer):
                         inner_non_seqs = op.inner_non_seqs(op.inputs)
                         outer_non_seqs = op.outer_non_seqs(node)
 
-                        new_info = op.info.copy()
                         st = len(op.mitmot_taps()) + len(op.mitsot_taps())
 
-                        new_info["tap_array"] = (
-                            new_info["tap_array"][: st + idx]
-                            + new_info["tap_array"][st + idx + 1 :]
+                        new_info = dataclasses.replace(
+                            op.info,
+                            tap_array=(
+                                op.info.tap_array[: st + idx]
+                                + op.info.tap_array[st + idx + 1 :]
+                            ),
+                            n_sit_sot=op.info.n_sit_sot - 1,
+                            n_nit_sot=op.info.n_nit_sot + 1,
                         )
-                        new_info["n_sit_sot"] -= 1
-                        new_info["n_nit_sot"] += 1
                         inner_sitsot = inner_sitsot[:idx] + inner_sitsot[idx + 1 :]
                         outer_sitsot = outer_sitsot[:idx] + outer_sitsot[idx + 1 :]
                         inner_sitsot_outs = (
@@ -2249,7 +2257,7 @@ class PushOutDot1(GlobalOptimizer):
                         new_inner_inps, new_inner_outs = reconstruct_graph(
                             _new_inner_inps, _new_inner_outs
                         )
-                        new_op = Scan(new_inner_inps, new_inner_outs, new_info)
+                        new_op = Scan(new_inner_inps, new_inner_outs, new_info, op.mode)
                         _scan_inputs = (
                             [node.inputs[0]]
                             + outer_seqs

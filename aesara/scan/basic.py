@@ -13,7 +13,7 @@ from aesara.graph.fg import MissingInputError
 from aesara.graph.op import get_test_value
 from aesara.graph.utils import TestValueError
 from aesara.scan import utils
-from aesara.scan.op import Scan
+from aesara.scan.op import Scan, ScanInfo
 from aesara.scan.utils import safe_new, traverse
 from aesara.tensor.exceptions import NotScalarConstantError
 from aesara.tensor.math import minimum
@@ -1021,31 +1021,32 @@ def scan(
     # Step 7. Create the Scan Op
     ##
 
-    tap_array = mit_sot_tap_array + [[-1] for x in range(n_sit_sot)]
+    tap_array = tuple(tuple(v) for v in mit_sot_tap_array) + tuple(
+        (-1,) for x in range(n_sit_sot)
+    )
     if allow_gc is None:
         allow_gc = config.scan__allow_gc
-    info = OrderedDict()
 
-    info["tap_array"] = tap_array
-    info["n_seqs"] = n_seqs
-    info["n_mit_mot"] = n_mit_mot
-    info["n_mit_mot_outs"] = n_mit_mot_outs
-    info["mit_mot_out_slices"] = mit_mot_out_slices
-    info["n_mit_sot"] = n_mit_sot
-    info["n_sit_sot"] = n_sit_sot
-    info["n_shared_outs"] = n_shared_outs
-    info["n_nit_sot"] = n_nit_sot
-    info["truncate_gradient"] = truncate_gradient
-    info["name"] = name
-    info["mode"] = mode
-    info["destroy_map"] = OrderedDict()
-    info["gpua"] = False
-    info["as_while"] = as_while
-    info["profile"] = profile
-    info["allow_gc"] = allow_gc
-    info["strict"] = strict
+    info = ScanInfo(
+        tap_array=tap_array,
+        n_seqs=n_seqs,
+        n_mit_mot=n_mit_mot,
+        n_mit_mot_outs=n_mit_mot_outs,
+        mit_mot_out_slices=tuple(tuple(v) for v in mit_mot_out_slices),
+        n_mit_sot=n_mit_sot,
+        n_sit_sot=n_sit_sot,
+        n_shared_outs=n_shared_outs,
+        n_nit_sot=n_nit_sot,
+        truncate_gradient=truncate_gradient,
+        name=name,
+        gpua=False,
+        as_while=as_while,
+        profile=profile,
+        allow_gc=allow_gc,
+        strict=strict,
+    )
 
-    local_op = Scan(inner_inputs, new_outs, info)
+    local_op = Scan(inner_inputs, new_outs, info, mode)
 
     ##
     # Step 8. Compute the outputs using the scan op
