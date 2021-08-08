@@ -371,11 +371,13 @@ class TestScan:
         aesara_values = my_f(state, steps)
         utt.assert_allclose(numpy_values, aesara_values[0])
 
+    @pytest.mark.xfail(
+        reason="This is a very poorly specified test that needs to be rewritten"
+    )
     def test_subtensor_multiple_slices(self):
-        # This addresses a bug reported by Matthias Zoehrer
-        # the bug happens when you have multiple subtensors on the output of
-        # scan (the bug requires the reshape to be produced, and it has
-        # which has something to do with how the subtensors overlap
+        # This addresses a bug that happens when you have multiple subtensors
+        # on the output of scan (the bug requires the reshape to be produced,
+        # and it has which has something to do with how the subtensors overlap
         def f_pow2(x_tm1):
             return 2 * x_tm1
 
