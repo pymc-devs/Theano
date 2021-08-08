@@ -274,7 +274,7 @@ class DimShuffle(ExternalCOp):
     def R_op(self, inputs, eval_points):
         if None in eval_points:
             return [None]
-        return self(*eval_points, **dict(return_list=True))
+        return self(*eval_points, return_list=True)
 
     def grad(self, inp, grads):
         from aesara.tensor.basic import as_tensor_variable
@@ -504,7 +504,7 @@ second dimension
             return self.name
 
     def R_op(self, inputs, eval_points):
-        outs = self(*inputs, **dict(return_list=True))
+        outs = self(*inputs, return_list=True)
         rval = [None for x in outs]
         # For each output
         for idx, out in enumerate(outs):

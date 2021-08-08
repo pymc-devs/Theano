@@ -2462,7 +2462,7 @@ class Sum(CAReduceDtype):
         # part of self
         if None in eval_points:
             return [None]
-        return self(*eval_points, **dict(return_list=True))
+        return self(*eval_points, return_list=True)
 
 
 def sum(input, axis=None, dtype=None, keepdims=False, acc_dtype=None):

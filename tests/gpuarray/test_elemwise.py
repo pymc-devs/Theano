@@ -41,7 +41,7 @@ class TestGpuBroadcast(test_elemwise.TestBroadcast):
     linkers = [PerformLinker, CLinker]
 
     def rand_cval(self, shp):
-        return rand_gpuarray(*shp, **dict(cls=gpuarray))
+        return rand_gpuarray(*shp, cls=gpuarray)
 
 
 def test_elemwise_pow():

@@ -218,7 +218,7 @@ def remove_constants_and_unused_inputs_scan(fgraph, node):
         op_outs = clone_replace(op_outs, replace=givens)
         nw_info = dataclasses.replace(op.info, n_seqs=nw_n_seqs)
         nwScan = Scan(nw_inner, op_outs, nw_info, op.mode)
-        nw_outs = nwScan(*nw_outer, **dict(return_list=True))
+        nw_outs = nwScan(*nw_outer, return_list=True)
         return dict([("remove", [node])] + list(zip(node.outputs, nw_outs)))
     else:
         return False
@@ -399,9 +399,7 @@ class PushOutNonSeqScan(GlobalOptimizer):
             nwScan = Scan(op_ins, op_outs, op.info, op.mode)
 
             # Do not call make_node for test_value
-            nw_node = nwScan(*(node.inputs + nw_outer), **dict(return_list=True))[
-                0
-            ].owner
+            nw_node = nwScan(*(node.inputs + nw_outer), return_list=True)[0].owner
 
             fgraph.replace_all_validate_remove(
                 list(zip(node.outputs, nw_node.outputs)),
@@ -672,7 +670,7 @@ class PushOutSeqScan(GlobalOptimizer):
             # Do not call make_node for test_value
             nw_node = nwScan(
                 *(node.inputs[:1] + nw_outer + node.inputs[1:]),
-                **dict(return_list=True),
+                return_list=True,
             )[0].owner
 
             fgraph.replace_all_validate_remove(
@@ -958,9 +956,9 @@ class PushOutScanOutput(GlobalOptimizer):
         )
 
         # Create the Apply node for the scan op
-        new_scan_node = new_scan_op(
-            *new_scan_args.outer_inputs, **dict(return_list=True)
-        )[0].owner
+        new_scan_node = new_scan_op(*new_scan_args.outer_inputs, return_list=True)[
+            0
+        ].owner
 
         # Modify the outer graph to make sure the outputs of the new scan are
         # used instead of the outputs of the old scan
@@ -1071,7 +1069,7 @@ class ScanInplaceOptimizer(GlobalOptimizer):
         new_op.destroy_map = destroy_map
 
         # Do not call make_node for test_value
-        new_outs = new_op(*inputs, **dict(return_list=True))
+        new_outs = new_op(*inputs, return_list=True)
         try:
             fgraph.replace_all_validate_remove(
                 list(zip(node.outputs, new_outs)),
@@ -1595,9 +1593,7 @@ class ScanSaveMem(GlobalOptimizer):
                 return
 
             # Do not call make_node for test_value
-            new_outs = Scan(inps, outs, info, op.mode)(
-                *node_ins, **dict(return_list=True)
-            )
+            new_outs = Scan(inps, outs, info, op.mode)(*node_ins, return_list=True)
 
             old_new = []
             # 3.7 Get replace pairs for those outputs that do not change

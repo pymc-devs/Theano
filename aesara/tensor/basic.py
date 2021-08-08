@@ -771,7 +771,7 @@ class Rebroadcast(COp):
     def R_op(self, inputs, eval_points):
         if eval_points[0] is None:
             return [None]
-        return self(*eval_points, **dict(return_list=True))
+        return self(*eval_points, return_list=True)
 
     def c_code(self, node, nodename, inp, out, sub):
         (iname,) = inp
@@ -1542,7 +1542,7 @@ class Alloc(COp):
     def R_op(self, inputs, eval_points):
         if eval_points[0] is None:
             return [None]
-        return self(eval_points[0], *inputs[1:], **dict(return_list=True))
+        return self(eval_points[0], *inputs[1:], return_list=True)
 
     def do_constant_folding(self, fgraph, node):
         clients = fgraph.clients[node.outputs[0]]
@@ -1945,7 +1945,7 @@ class Split(COp):
     def grad(self, inputs, g_outputs):
         """Join the gradients along the axis that was used to split x."""
         x, axis, n = inputs
-        outputs = self(*inputs, **dict(return_list=True))
+        outputs = self(*inputs, return_list=True)
         # If all the output gradients are disconnected, then so are the inputs
         if builtins.all([isinstance(g.type, DisconnectedType) for g in g_outputs]):
             return [
