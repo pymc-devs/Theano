@@ -39,7 +39,6 @@ from aesara.tensor.subtensor import set_subtensor
 from aesara.tensor.var import TensorConstant
 
 
-# Logging function for sending warning or info
 _logger = logging.getLogger("aesara.scan.utils")
 
 

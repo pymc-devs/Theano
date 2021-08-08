@@ -1006,7 +1006,7 @@ def scan(
     # gpuarray is imported here, instead of being imported on top of
     # the file because that would force on the user some dependencies that we
     # might do not want to. Currently we are working on removing the
-    # dependencies on sandbox code completeley.
+    # dependencies on sandbox code completely.
     from aesara import gpuarray
 
     if gpuarray.pygpu_activated:

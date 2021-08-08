@@ -1736,7 +1736,6 @@ class ScanMerge(GlobalOptimizer):
             return ls
 
         for idx, nd in enumerate(nodes):
-            # Seq
             inner_ins[idx].append(rename(nd.op.inner_seqs(nd.op.inputs), idx))
             outer_ins += rename(nd.op.outer_seqs(nd.inputs), idx)
 
