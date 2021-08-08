@@ -103,20 +103,6 @@ from aesara.tensor.subtensor import (
 from aesara.tensor.var import TensorConstant
 
 
-__docformat__ = "restructedtext en"
-__authors__ = (
-    "Razvan Pascanu "
-    "Frederic Bastien "
-    "James Bergstra "
-    "Pascal Lamblin "
-    "Arnaud Bergeron "
-    "PyMC Developers "
-    "Aesara Developers "
-)
-__copyright__ = "(c) 2010, Universite de Montreal"
-
-
-# Logging function for sending warning or info
 _logger = logging.getLogger("aesara.scan.opt")
 
 list_opt_slice = [

@@ -1,15 +1,3 @@
-__docformat__ = "restructedtext en"
-__authors__ = (
-    "Razvan Pascanu "
-    "Frederic Bastien "
-    "James Bergstra "
-    "Pascal Lamblin "
-    "PyMC Developers "
-    "Aesara Developers "
-)
-__copyright__ = "(c) 2010, Universite de Montreal"
-
-
 import logging
 from collections import OrderedDict
 

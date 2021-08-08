@@ -46,12 +46,6 @@
     ones (where applicable). All this information is described (more or less)
     by describing the arguments of this function)
 """
-
-
-__authors__ = "Razvan Pascanu " "PyMC Developers " "Aesara Developers "
-__copyright__ = "(c) 2011, Universite de Montreal"
-
-
 import cython
 import numpy
 
