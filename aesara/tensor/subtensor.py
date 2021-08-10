@@ -1235,33 +1235,52 @@ def set_subtensor(x, y, inplace=False, tolerate_inplace_aliasing=False):
 
 
 def inc_subtensor(
-    x, y, inplace=False, set_instead_of_inc=False, tolerate_inplace_aliasing=False
+    x,
+    y,
+    inplace=False,
+    set_instead_of_inc=False,
+    tolerate_inplace_aliasing=False,
+    ignore_duplicates=False,
 ):
-    """
-    Return x with the given subtensor incremented by y.
+    """Update the value of an indexed array by a given amount.
+
+    This is equivalent to ``x[indices] += y`` or ``np.add.at(x, indices, y)``,
+    depending on the value of `ignore_duplicates`.
 
     Parameters
     ----------
     x
         The symbolic result of a Subtensor operation.
     y
-        The amount by which to increment the subtensor in question.
+        The amount by which to increment the array.
     inplace
-        Don't use. Aesara will do it when possible.
+        Don't use.  Aesara will do in-place operations itself, when possible.
     set_instead_of_inc
         If True, do a set_subtensor instead.
     tolerate_inplace_aliasing:
-        Allow x and y to be views of a single underlying array even while
-        working inplace. For correct results, x and y must not be overlapping
-        views; if they overlap, the result of this Op will generally be
-        incorrect. This value has no effect if inplace=False.
+        Allow `x` and `y` to be views of a single underlying array even while
+        working in-place. For correct results, `x` and `y` must not be overlapping
+        views; if they overlap, the result of this `Op` will generally be
+        incorrect. This value has no effect if ``inplace=False``.
+    ignore_duplicates
+        This determines whether or not ``x[indices] += y`` is used or
+        ``np.add.at(x, indices, y)``.
 
     Examples
     --------
-    To replicate the numpy expression "r[10:] += 5", type
+    To replicate the expression ``r[10:] += 5``:
 
-    >>> r = ivector()
-    >>> new_r = inc_subtensor(r[10:], 5)
+    ..code-block:: python
+
+        r = ivector()
+        new_r = inc_subtensor(r[10:], 5)
+
+    To replicate the expression ``r[[0, 1, 0]] += 5``:
+
+    ..code-block:: python
+
+        r = ivector()
+        new_r = inc_subtensor(r[10:], 5, ignore_duplicates=True)
 
     """
     # First of all, y cannot have a higher dimension than x,
@@ -1306,12 +1325,23 @@ def inc_subtensor(
     elif isinstance(x.owner.op, AdvancedSubtensor1):
         real_x = x.owner.inputs[0]
         ilist = x.owner.inputs[1]
-        the_op = AdvancedIncSubtensor1(inplace, set_instead_of_inc=set_instead_of_inc)
+        if ignore_duplicates:
+            the_op = AdvancedIncSubtensor(
+                inplace, set_instead_of_inc=set_instead_of_inc, ignore_duplicates=True
+            )
+        else:
+            the_op = AdvancedIncSubtensor1(
+                inplace, set_instead_of_inc=set_instead_of_inc
+            )
         return the_op(real_x, y, ilist)
     elif isinstance(x.owner.op, AdvancedSubtensor):
         real_x = x.owner.inputs[0]
         ilist = x.owner.inputs[1:]
-        the_op = AdvancedIncSubtensor(inplace, set_instead_of_inc=set_instead_of_inc)
+        the_op = AdvancedIncSubtensor(
+            inplace,
+            set_instead_of_inc=set_instead_of_inc,
+            ignore_duplicates=ignore_duplicates,
+        )
         return the_op(real_x, y, *ilist)
     elif isinstance(x.owner.op, DimShuffle):
         inner_x = x.owner.inputs[0]
@@ -1359,6 +1389,7 @@ def inc_subtensor(
             inplace=inplace,
             set_instead_of_inc=set_instead_of_inc,
             tolerate_inplace_aliasing=tolerate_inplace_aliasing,
+            ignore_duplicates=ignore_duplicates,
         )
         # The broadcastable pattern of inner_x may not be the same as
         # the one of x, so we have to build a new dimshuffle here,
@@ -1405,6 +1436,7 @@ def inc_subtensor(
             inplace=inplace,
             set_instead_of_inc=set_instead_of_inc,
             tolerate_inplace_aliasing=tolerate_inplace_aliasing,
+            ignore_duplicates=ignore_duplicates,
         )
         return inner_incsubtensor
     else:
@@ -2602,13 +2634,16 @@ advanced_subtensor = AdvancedSubtensor()
 class AdvancedIncSubtensor(Op):
     """Increments a subtensor using advanced indexing."""
 
-    __props__ = ("inplace", "set_instead_of_inc")
+    __props__ = ("inplace", "set_instead_of_inc", "ignore_duplicates")
 
-    def __init__(self, inplace=False, set_instead_of_inc=False):
+    def __init__(
+        self, inplace=False, set_instead_of_inc=False, ignore_duplicates=False
+    ):
         self.set_instead_of_inc = set_instead_of_inc
         self.inplace = inplace
         if inplace:
             self.destroy_map = {0: [0]}
+        self.ignore_duplicates = ignore_duplicates
 
     def __str__(self):
         return "{}{{{}, {}}}".format(
@@ -2634,18 +2669,22 @@ class AdvancedIncSubtensor(Op):
 
     def perform(self, node, inputs, out_):
 
-        check_advanced_indexing_dimensions(inputs[0], inputs[2:])
+        x, y, *indices = inputs
+
+        check_advanced_indexing_dimensions(x, indices)
 
         (out,) = out_
         if not self.inplace:
-            out[0] = inputs[0].copy()
+            out[0] = x.copy()
         else:
-            out[0] = inputs[0]
+            out[0] = x
 
         if self.set_instead_of_inc:
-            out[0][tuple(inputs[2:])] = inputs[1]
+            out[0][tuple(indices)] = y
+        elif self.ignore_duplicates:
+            out[0][tuple(indices)] += y
         else:
-            np.add.at(out[0], tuple(inputs[2:]), inputs[1])
+            np.add.at(out[0], tuple(indices), y)
 
     def infer_shape(self, fgraph, node, ishapes):
         return [ishapes[0]]
@@ -2691,6 +2730,10 @@ class AdvancedIncSubtensor(Op):
 
 advanced_inc_subtensor = AdvancedIncSubtensor()
 advanced_set_subtensor = AdvancedIncSubtensor(set_instead_of_inc=True)
+advanced_inc_subtensor_nodup = AdvancedIncSubtensor(ignore_duplicates=True)
+advanced_set_subtensor_nodup = AdvancedIncSubtensor(
+    set_instead_of_inc=True, ignore_duplicates=True
+)
 
 
 def take(a, indices, axis=None, mode="raise"):

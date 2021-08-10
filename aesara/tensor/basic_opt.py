@@ -3350,7 +3350,9 @@ compile.optdb.register(
 def local_inplace_AdvancedIncSubtensor(fgraph, node):
     if isinstance(node.op, AdvancedIncSubtensor) and not node.op.inplace:
         new_op = type(node.op)(
-            inplace=True, set_instead_of_inc=node.op.set_instead_of_inc
+            inplace=True,
+            set_instead_of_inc=node.op.set_instead_of_inc,
+            ignore_duplicates=node.op.ignore_duplicates,
         )
         new_node = new_op(*node.inputs)
         copy_stack_trace(node.outputs, new_node)

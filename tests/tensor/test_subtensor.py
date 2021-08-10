@@ -1918,83 +1918,142 @@ class TestAdvancedSubtensor:
         rval = ft4v[:, :, ix2v, None, :]
         utt.assert_allclose(rval, aval)
 
-    def test_inc_adv_subtensor_w_2vec(self):
+    @pytest.mark.parametrize(
+        "ignore_duplicates",
+        [
+            True,
+            False,
+        ],
+    )
+    def test_inc_adv_subtensor_w_2vec(self, ignore_duplicates):
         subt = self.m[self.ix1, self.ix12]
-        a = inc_subtensor(subt, subt)
+        a = inc_subtensor(subt, subt, ignore_duplicates=ignore_duplicates)
 
         typ = TensorType(self.m.type.dtype, self.ix2.type.broadcastable)
-        assert a.type == typ, (a.type, typ)
+        assert a.type == typ
+
         f = aesara.function(
             [self.m, self.ix1, self.ix12], a, allow_input_downcast=True, mode=self.mode
         )
-        aval = f([[0.4, 0.9, 0.1], [5, 6, 7], [0.5, 0.3, 0.15]], [1, 2, 1], [0, 1, 0])
-        assert np.allclose(
-            aval, [[0.4, 0.9, 0.1], [5 * 3, 6, 7], [0.5, 0.3 * 2, 0.15]]
-        ), aval
 
-    def test_inc_adv_subtensor_with_broadcasting(self):
+        m_val = [[0.4, 0.9, 0.1], [5, 6, 7], [0.5, 0.3, 0.15]]
+        ix1_val = [1, 2, 1]
+        ix2_val = [0, 1, 0]
+
+        exp_aval = np.array(m_val)
+        if ignore_duplicates:
+            exp_aval[ix1_val, ix2_val] += exp_aval[ix1_val, ix2_val]
+        else:
+            np.add.at(exp_aval, (ix1_val, ix2_val), exp_aval[ix1_val, ix2_val])
+
+        aval = f(m_val, ix1_val, ix2_val)
+        assert np.allclose(aval, exp_aval)
+
+    @pytest.mark.parametrize(
+        "ignore_duplicates",
+        [
+            True,
+            False,
+        ],
+    )
+    def test_inc_adv_subtensor_with_broadcasting(self, ignore_duplicates):
         inc = dscalar()
-        a = inc_subtensor(self.m[self.ix1, self.ix12], inc)
+        a = inc_subtensor(
+            self.m[self.ix1, self.ix12], inc, ignore_duplicates=ignore_duplicates
+        )
         g_inc = aesara.grad(a.sum(), inc)
 
-        assert a.type == self.m.type, (a.type, self.m.type)
+        assert a.type == self.m.type
+
         f = aesara.function(
             [self.m, self.ix1, self.ix12, inc],
             [a, g_inc],
             allow_input_downcast=True,
             mode=self.mode,
         )
-        aval, gval = f(
-            [[0.4, 0.9, 0.1], [5, 6, 7], [0.5, 0.3, 0.15]], [1, 2, 1], [0, 1, 0], 2.1
-        )
-        assert np.allclose(
-            aval, [[0.4, 0.9, 0.1], [5 + 2.1 * 2, 6, 7], [0.5, 0.3 + 2.1, 0.15]]
-        ), aval
-        assert np.allclose(gval, 3.0), gval
 
-    def test_inc_adv_subtensor1_with_broadcasting(self):
+        m_val = [[0.4, 0.9, 0.1], [5, 6, 7], [0.5, 0.3, 0.15]]
+        ix1_val = [1, 2, 1]
+        ix2_val = [0, 1, 0]
+        inc_val = 2.1
+
+        exp_aval = np.array(m_val)
+        if ignore_duplicates:
+            exp_aval[ix1_val, ix2_val] += inc_val
+        else:
+            np.add.at(exp_aval, (ix1_val, ix2_val), inc_val)
+
+        aval, gval = f(m_val, ix1_val, ix2_val, inc_val)
+        assert np.allclose(aval, exp_aval)
+        assert np.allclose(gval, 3.0)
+
+    @pytest.mark.parametrize(
+        "ignore_duplicates",
+        [
+            True,
+            False,
+        ],
+    )
+    def test_inc_adv_subtensor1_with_broadcasting(self, ignore_duplicates):
         inc = dscalar()
-        a = inc_subtensor(self.m[self.ix1], inc)
+        a = inc_subtensor(self.m[self.ix1], inc, ignore_duplicates=ignore_duplicates)
         g_inc = aesara.grad(a.sum(), inc)
 
-        assert a.type == self.m.type, (a.type, self.m.type)
+        assert a.type == self.m.type
+
         f = aesara.function(
             [self.m, self.ix1, inc],
             [a, g_inc],
             allow_input_downcast=True,
             mode=self.mode,
         )
-        aval, gval = f([[0.4, 0.9, 0.1], [5, 6, 7], [0.5, 0.3, 0.15]], [0, 1, 0], 2.1)
-        assert np.allclose(
-            aval,
-            [
-                [0.4 + 2.1 * 2, 0.9 + 2.1 * 2, 0.1 + 2.1 * 2],
-                [5 + 2.1, 6 + 2.1, 7 + 2.1],
-                [0.5, 0.3, 0.15],
-            ],
-        ), aval
-        assert np.allclose(gval, 9.0), gval
 
-    def test_inc_adv_subtensor_with_index_broadcasting(self):
-        a = inc_subtensor(self.m[self.ix1, self.ix2], 2.1)
+        m_val = [[0.4, 0.9, 0.1], [5, 6, 7], [0.5, 0.3, 0.15]]
+        ix1_val = [0, 1, 0]
+        inc_val = 2.1
 
-        assert a.type == self.m.type, (a.type, self.m.type)
+        exp_aval = np.array(m_val).copy()
+        if ignore_duplicates:
+            exp_aval[ix1_val] += inc_val
+        else:
+            np.add.at(exp_aval, ix1_val, inc_val)
+
+        aval, gval = f(m_val, ix1_val, inc_val)
+
+        assert np.allclose(aval, exp_aval)
+        assert np.allclose(gval, 9.0)
+
+    @pytest.mark.parametrize(
+        "ignore_duplicates",
+        [
+            True,
+            False,
+        ],
+    )
+    def test_inc_adv_subtensor_with_index_broadcasting(self, ignore_duplicates):
+        a = inc_subtensor(
+            self.m[self.ix1, self.ix2], 2.1, ignore_duplicates=ignore_duplicates
+        )
+
+        assert a.type == self.m.type
+
         f = aesara.function(
             [self.m, self.ix1, self.ix2], a, allow_input_downcast=True, mode=self.mode
         )
-        aval = f(
-            [[0.4, 0.9, 0.1], [5, 6, 7], [0.5, 0.3, 0.15]],
-            [0, 2, 0],
-            [[0, 1, 0], [2, 2, 2]],
-        )
-        assert np.allclose(
-            aval,
-            [
-                [0.4 + 2 * 2.1, 0.9, 0.1 + 2 * 2.1],
-                [5, 6, 7],
-                [0.5, 0.3 + 2.1, 0.15 + 2.1],
-            ],
-        ), aval
+
+        m_val = [[0.4, 0.9, 0.1], [5, 6, 7], [0.5, 0.3, 0.15]]
+        ix1_val = [0, 2, 0]
+        ix2_val = [[0, 1, 0], [2, 2, 2]]
+
+        inc_val = 2.1
+        exp_aval = np.array(m_val)
+        if ignore_duplicates:
+            exp_aval[ix1_val, ix2_val] += inc_val
+        else:
+            np.add.at(exp_aval, (ix1_val, ix2_val), inc_val)
+
+        aval = f(m_val, ix1_val, ix2_val)
+        assert np.allclose(aval, exp_aval)
 
     def test_2d_3d_tensors(self):
         rng = np.random.default_rng(utt.fetch_seed())
