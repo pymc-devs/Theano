@@ -55,6 +55,7 @@ from aesara.tensor.basic import (
     fill,
     flatnonzero,
     flatten,
+    full_like,
     get_scalar_constant_value,
     get_vector_length,
     horizontal_stack,
@@ -4211,3 +4212,20 @@ class TestTakeAlongAxis:
         indices = aet.tensor(np.float64, [False] * 2)
         with pytest.raises(IndexError):
             aet.take_along_axis(arr, indices)
+
+
+@pytest.mark.parametrize(
+    "inp, shape",
+    [(scalar, ()), (fvector, 3), (fmatrix, (3, 4))],
+)
+def test_full_like(inp, shape):
+    fill_value = 5
+    dtype = "float32"
+
+    x = inp("x")
+    y = full_like(x, fill_value, dtype=dtype)
+
+    np.testing.assert_array_equal(
+        y.eval({x: np.zeros(shape, dtype=dtype)}),
+        np.full(shape, fill_value, dtype=dtype),
+    )
