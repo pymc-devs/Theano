@@ -1774,6 +1774,50 @@ def local_neg_div_neg(fgraph, node):
                     return [true_div(new_num, denom)]
 
 
+@register_specialize
+@local_optimizer([sub])
+def local_sub_neg_to_add(fgraph, node):
+    """
+    x - (-y) -> x + y
+
+    """
+    if node.op == sub:
+        minuend, subtrahend = node.inputs
+
+        if subtrahend.owner:
+            if subtrahend.owner.op == neg:
+                pre_neg = subtrahend.owner.inputs[0]
+                new_out = add(minuend, pre_neg)
+                return [new_out]
+
+
+@register_specialize
+@local_optimizer([add])
+def local_add_neg_to_sub(fgraph, node):
+    """
+    -x + y -> y - x
+    x + (-y) -> x - y
+
+    """
+    # Rewrite is only applicable when there are two inputs to add
+    if node.op == add and len(node.inputs) == 2:
+        node.outputs[0].dtype
+
+        # Look for pattern with either input order
+        for first, second in (node.inputs, reversed(node.inputs)):
+            if second.owner:
+                if second.owner.op == neg:
+                    pre_neg = second.owner.inputs[0]
+                    new_out = sub(first, pre_neg)
+                    return [new_out]
+
+            # Check if it is a negative constant
+            const = AlgebraicCanonizer.get_constant(second)
+            if const is not None and const < 0:
+                new_out = sub(first, np.abs(const))
+                return [new_out]
+
+
 @local_optimizer([mul])
 def local_mul_zero(fgraph, node):
     """

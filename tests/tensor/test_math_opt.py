@@ -4507,3 +4507,101 @@ def test_log1mexp_stabilization():
         f(np.array([-0.8, -0.6], dtype=config.floatX)),
         np.log(1 - np.exp([-0.8, -0.6])),
     )
+
+
+@pytest.mark.parametrize(
+    "x, x_test",
+    [
+        (scalar(), np.full((), 1.0, dtype=config.floatX)),
+        (vector(), np.full(1, 2.0, dtype=config.floatX)),
+        (matrix(), np.full((2, 2), 3.0, dtype=config.floatX)),
+    ],
+)
+@pytest.mark.parametrize(
+    "y, y_test",
+    [
+        (scalar(), np.full((), 1.0, dtype=config.floatX)),
+        (vector(), np.full(1, 2.0, dtype=config.floatX)),
+        (matrix(), np.full((2, 2), 3.0, dtype=config.floatX)),
+    ],
+)
+def test_local_sub_neg_to_add(x, y, x_test, y_test):
+    mode = Mode("py").including("specialize")
+
+    f = function([x, y], x - (-y), mode=mode)
+
+    nodes = [
+        node.op
+        for node in f.maker.fgraph.toposort()
+        if not isinstance(node.op, DimShuffle)
+    ]
+    assert nodes == [aet.add]
+    assert np.allclose(f(x_test, y_test), x_test - (-y_test))
+
+
+def test_local_sub_neg_to_add_const():
+    # This rewrite is achieved accidentally by the local_add_canonizer
+    mode = Mode("py").including("canonicalize", "specialize")
+    x = vector("x")
+    const = 5.0
+    f = function([x], x - (-const), mode=mode)
+
+    nodes = [
+        node.op
+        for node in f.maker.fgraph.toposort()
+        if not isinstance(node.op, DimShuffle)
+    ]
+    assert nodes == [aet.add]
+
+    x_test = np.array([3, 4], dtype=config.floatX)
+    assert np.allclose(f(x_test), x_test - (-const))
+
+
+@pytest.mark.parametrize(
+    "x, x_test",
+    [
+        (scalar(), np.full((), 1.0, dtype=config.floatX)),
+        (vector(), np.full(1, 2.0, dtype=config.floatX)),
+        (matrix(), np.full((2, 2), 3.0, dtype=config.floatX)),
+    ],
+)
+@pytest.mark.parametrize(
+    "y, y_test",
+    [
+        (scalar(), np.full((), 1.0, dtype=config.floatX)),
+        (vector(), np.full(1, 2.0, dtype=config.floatX)),
+        (matrix(), np.full((2, 2), 3.0, dtype=config.floatX)),
+    ],
+)
+@pytest.mark.parametrize("first_negative", (True, False))
+def test_local_add_neg_to_sub(x, y, x_test, y_test, first_negative):
+    mode = Mode("py").including("specialize")
+
+    out = -x + y if first_negative else x + (-y)
+    f = function([x, y], out, mode=mode)
+
+    nodes = [
+        node.op
+        for node in f.maker.fgraph.toposort()
+        if not isinstance(node.op, DimShuffle)
+    ]
+    assert nodes == [aet.sub]
+    exp = -x_test + y_test if first_negative else x_test + (-y_test)
+    assert np.allclose(f(x_test, y_test), exp)
+
+
+def test_local_add_neg_to_sub_const():
+    mode = Mode("py").including("specialize")
+    x = vector("x")
+    const = 5.0
+    f = function([x], x + (-const), mode=mode)
+
+    nodes = [
+        node.op
+        for node in f.maker.fgraph.toposort()
+        if not isinstance(node.op, DimShuffle)
+    ]
+    assert nodes == [aet.sub]
+
+    x_test = np.array([3, 4], dtype=config.floatX)
+    assert np.allclose(f(x_test), x_test + (-const))
