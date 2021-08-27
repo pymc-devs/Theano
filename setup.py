@@ -57,7 +57,15 @@ if __name__ == "__main__":
         license=LICENSE,
         platforms=PLATFORMS,
         packages=find_packages(exclude=["tests", "tests.*"]),
-        install_requires=["numpy>=1.17.0", "scipy>=0.14", "filelock"],
+        install_requires=[
+            "numpy>=1.17.0",
+            "scipy>=0.14",
+            "filelock",
+            "etuples",
+            "logical-unification",
+            "kanren",
+            "cons",
+        ],
         package_data={
             "": [
                 "*.txt",
