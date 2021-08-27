@@ -217,7 +217,10 @@ def local_dimshuffle_rv_lift(fgraph, node):
         if config.compute_test_value != "off":
             compute_test_value(new_node)
 
-        return [new_node.outputs[1]]
+        out = new_node.outputs[1]
+        if base_rv.name:
+            out.name = f"{base_rv.name}_lifted"
+        return [out]
 
     ds_in_reps_space = ds_reps_new_dims and all(
         d < reps_ind_split_idx for n, d in ds_reps_new_dims
@@ -235,7 +238,10 @@ def local_dimshuffle_rv_lift(fgraph, node):
         if config.compute_test_value != "off":
             compute_test_value(new_node)
 
-        return [new_node.outputs[1]]
+        out = new_node.outputs[1]
+        if base_rv.name:
+            out.name = f"{base_rv.name}_lifted"
+        return [out]
 
     return False
 
