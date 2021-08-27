@@ -291,7 +291,8 @@ class TestLogSoftmax(utt.InferShapeTester):
         m.check_isfinite = False
         # some inputs that are large to make the gradient explode in the non
         # optimized case
-        a = np.exp(10 * np.random.random((5, 10)).astype(config.floatX))
+        rng = np.random.default_rng(98324)
+        a = np.exp(10 * rng.random((5, 10)).astype(config.floatX))
 
         def myfunc(x):
             sm = softmax(x)
