@@ -272,10 +272,19 @@ _good_broadcast_binary_gamma = dict(
     ),
 )
 
+_good_broadcast_binary_gamma_grad = dict(
+    normal=_good_broadcast_binary_gamma["normal"],
+    specific_branches=(
+        np.array([0.7, 11.0, 19.0]),
+        np.array([16.0, 31.0, 3.0]),
+    ),
+)
+
 TestGammaIncBroadcast = makeBroadcastTester(
     op=aet.gammainc,
     expected=expected_gammainc,
     good=_good_broadcast_binary_gamma,
+    grad=_good_broadcast_binary_gamma_grad,
     eps=2e-8,
     mode=mode_no_scipy,
 )
@@ -293,6 +302,7 @@ TestGammaInccBroadcast = makeBroadcastTester(
     op=aet.gammaincc,
     expected=expected_gammaincc,
     good=_good_broadcast_binary_gamma,
+    grad=_good_broadcast_binary_gamma_grad,
     eps=2e-8,
     mode=mode_no_scipy,
 )
@@ -305,6 +315,53 @@ TestGammaInccInplaceBroadcast = makeBroadcastTester(
     mode=mode_no_scipy,
     inplace=True,
 )
+
+
+def test_gammainc_ddk_tabulated_values():
+    # This test replicates part of the old STAN test:
+    # https://github.com/stan-dev/math/blob/21333bb70b669a1bd54d444ecbe1258078d33153/test/unit/math/prim/scal/fun/grad_reg_lower_inc_gamma_test.cpp
+    k, x = aet.scalars("k", "x")
+    gammainc_out = aet.gammainc(k, x)
+    gammaincc_ddk = aet.grad(gammainc_out, k)
+    f_grad = function([k, x], gammaincc_ddk)
+
+    for test_k, test_x, expected_ddk in (
+        (0.0001, 0, 0),  # Limit condition
+        (0.0001, 0.0001, -8.62594024578651),
+        (0.0001, 6.2501, -0.0002705821702813008),
+        (0.0001, 12.5001, -2.775406821933887e-7),
+        (0.0001, 18.7501, -3.653379783274905e-10),
+        (0.0001, 25.0001, -5.352425240798134e-13),
+        (0.0001, 29.7501, -3.912723010174313e-15),
+        (4.7501, 0.0001, 0),
+        (4.7501, 6.2501, -0.1330287013623819),
+        (4.7501, 12.5001, -0.004712176128251421),
+        (4.7501, 18.7501, -0.00004898939126595217),
+        (4.7501, 25.0001, -3.098781566343336e-7),
+        (4.7501, 29.7501, -5.478399030091586e-9),
+        (9.5001, 0.0001, -5.869126325643798e-15),
+        (9.5001, 6.2501, -0.07717967485372858),
+        (9.5001, 12.5001, -0.07661095137424883),
+        (9.5001, 18.7501, -0.005594043337407605),
+        (9.5001, 25.0001, -0.0001410123206233104),
+        (9.5001, 29.7501, -5.75023943432906e-6),
+        (14.2501, 0.0001, -7.24495484418588e-15),
+        (14.2501, 6.2501, -0.003689474744087815),
+        (14.2501, 12.5001, -0.1008796179460247),
+        (14.2501, 18.7501, -0.05124664255610913),
+        (14.2501, 25.0001, -0.005115177188580634),
+        (14.2501, 29.7501, -0.0004793406401524598),
+        (19.0001, 0.0001, -8.26027539153394e-15),
+        (19.0001, 6.2501, -0.00003509660448733015),
+        (19.0001, 12.5001, -0.02624562607393565),
+        (19.0001, 18.7501, -0.0923829735092193),
+        (19.0001, 25.0001, -0.03641281853907181),
+        (19.0001, 29.7501, -0.007828749832965796),
+    ):
+        np.testing.assert_allclose(
+            f_grad(test_k, test_x), expected_ddk, rtol=1e-5, atol=1e-14
+        )
+
 
 TestGammaUBroadcast = makeBroadcastTester(
     op=aet.gammau,
