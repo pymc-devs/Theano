@@ -159,7 +159,8 @@ def local_AdvancedIncSubtensor_to_AdvancedIncSubtensor1(fgraph, node):
     This is only done when there's a single vector index.
     """
 
-    if not isinstance(node.op, AdvancedIncSubtensor):
+    if not isinstance(node.op, AdvancedIncSubtensor) or node.op.ignore_duplicates:
+        # `AdvancedIncSubtensor1` does not ignore duplicate index values
         return
 
     res = node.inputs[0]
@@ -169,15 +170,17 @@ def local_AdvancedIncSubtensor_to_AdvancedIncSubtensor1(fgraph, node):
     axis = get_advsubtensor_axis(indices)
 
     if axis is None or indices[axis].dtype == "bool":
-        # Booleans aren't handled
+        # Booleans aren't currently handled by `AdvancedIncSubtensor1`
         return
 
     new_subtensor = transform_take(res, indices[axis], axis)
-    set_instead_of_inc = node.op.set_instead_of_inc
-    inplace = node.op.inplace
 
     new_res = inc_subtensor(
-        new_subtensor, val, inplace=inplace, set_instead_of_inc=set_instead_of_inc
+        new_subtensor,
+        val,
+        inplace=node.op.inplace,
+        set_instead_of_inc=node.op.set_instead_of_inc,
+        ignore_duplicates=False,
     )
     copy_stack_trace(node.outputs[0], new_res)
     return [new_res]
