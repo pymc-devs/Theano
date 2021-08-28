@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+import sys
+
 from setuptools import find_packages, setup
 
 import versioneer
@@ -43,6 +45,11 @@ Programming Language :: Python :: 3.9
 """
 CLASSIFIERS = [_f for _f in CLASSIFIERS.split("\n") if _f]
 
+install_requires = ["numpy>=1.17.0", "scipy>=0.14", "filelock"]
+
+if sys.version_info[0:2] < (3, 7):
+    install_requires += ["dataclasses"]
+
 if __name__ == "__main__":
     setup(
         name=NAME,
@@ -57,7 +64,7 @@ if __name__ == "__main__":
         license=LICENSE,
         platforms=PLATFORMS,
         packages=find_packages(exclude=["tests", "tests.*"]),
-        install_requires=["numpy>=1.17.0", "scipy>=0.14", "filelock"],
+        install_requires=install_requires,
         package_data={
             "": [
                 "*.txt",

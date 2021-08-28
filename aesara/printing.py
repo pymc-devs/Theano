@@ -237,7 +237,9 @@ N.B.:
             outer_inputs = s.owner.inputs
             inner_to_outer_inputs = {
                 inner_inputs[i]: outer_inputs[o]
-                for i, o in s.owner.op.var_mappings["outer_inp_from_inner_inp"].items()
+                for i, o in s.owner.op.get_oinp_iinp_iout_oout_mappings()[
+                    "outer_inp_from_inner_inp"
+                ].items()
             }
 
             print("", file=_file)

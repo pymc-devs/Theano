@@ -577,7 +577,7 @@ class Reshape(COp):
     def R_op(self, inputs, eval_points):
         if eval_points[0] is None:
             return [None]
-        return self(eval_points[0], *inputs[1:], **dict(return_list=True))
+        return self(eval_points[0], *inputs[1:], return_list=True)
 
     def infer_shape(self, fgraph, node, ishapes):
         from aesara.tensor.math import eq, maximum, mul

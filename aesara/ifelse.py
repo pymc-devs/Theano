@@ -149,7 +149,7 @@ class IfElse(_NoPythonOp):
             new_outs = new_ifelse(
                 node.inputs[0],
                 *(new_ts_inputs + new_fs_inputs),
-                **dict(return_list=True),
+                return_list=True,
             )
         else:
             new_outs = []
@@ -203,7 +203,7 @@ class IfElse(_NoPythonOp):
         return Apply(self, [c] + list(args), [t.type() for t in aes])
 
     def R_op(self, inputs, eval_points):
-        return self(inputs[0], *eval_points[1:], **dict(return_list=True))
+        return self(inputs[0], *eval_points[1:], return_list=True)
 
     def grad(self, ins, grads):
         aes = ins[1:][: self.n_outs]
@@ -244,8 +244,8 @@ class IfElse(_NoPythonOp):
         condition_grad = condition.zeros_like().astype(config.floatX)
         return (
             [condition_grad]
-            + if_true_op(*if_true, **dict(return_list=True))
-            + if_false_op(*if_false, **dict(return_list=True))
+            + if_true_op(*if_true, return_list=True)
+            + if_false_op(*if_false, return_list=True)
         )
 
     def make_thunk(self, node, storage_map, compute_map, no_recycling, impl=None):
@@ -407,7 +407,7 @@ def ifelse(condition, then_branch, else_branch, name=None):
     new_ifelse = IfElse(n_outs=len(then_branch), as_view=False, gpu=False, name=name)
 
     ins = [condition] + list(new_then_branch) + list(new_else_branch)
-    rval = new_ifelse(*ins, **dict(return_list=True))
+    rval = new_ifelse(*ins, return_list=True)
 
     if rval_type is None:
         return rval[0]
@@ -432,7 +432,7 @@ def cond_make_inplace(fgraph, node):
         )
     ):
         return IfElse(n_outs=op.n_outs, as_view=True, gpu=op.gpu, name=op.name)(
-            *node.inputs, **dict(return_list=True)
+            *node.inputs, return_list=True
         )
     return False
 
@@ -533,8 +533,8 @@ def ifelse_lift_single_if_through_acceptable_ops(fgraph, main_node):
         else:
             true_ins.append(x)
             false_ins.append(x)
-    true_eval = mop(*true_ins, **dict(return_list=True))
-    false_eval = mop(*false_ins, **dict(return_list=True))
+    true_eval = mop(*true_ins, return_list=True)
+    false_eval = mop(*false_ins, return_list=True)
     # true_eval  = clone_replace(outs, replace = dict(zip(node.outputs, aes)))
     # false_eval = clone_replace(outs, replace = dict(zip(node.outputs, fs)))
 
@@ -566,7 +566,7 @@ def cond_merge_ifs_true(fgraph, node):
     old_ins = list(node.inputs)
     for pos, var in replace.items():
         old_ins[pos] = var
-    return op(*old_ins, **dict(return_list=True))
+    return op(*old_ins, return_list=True)
 
 
 @local_optimizer([IfElse])
@@ -593,7 +593,7 @@ def cond_merge_ifs_false(fgraph, node):
     old_ins = list(node.inputs)
     for pos, var in replace.items():
         old_ins[pos] = var
-    return op(*old_ins, **dict(return_list=True))
+    return op(*old_ins, return_list=True)
 
 
 class CondMerge(GlobalOptimizer):
@@ -635,7 +635,7 @@ class CondMerge(GlobalOptimizer):
                     name=mn_name + "&" + pl_name,
                 )
                 print("here")
-                new_outs = new_ifelse(*new_ins, **dict(return_list=True))
+                new_outs = new_ifelse(*new_ins, return_list=True)
                 new_outs = [clone_replace(x) for x in new_outs]
                 old_outs = []
                 if type(merging_node.outputs) not in (list, tuple):
@@ -684,7 +684,7 @@ def cond_remove_identical(fgraph, node):
     new_ifelse = IfElse(n_outs=len(nw_ts), as_view=op.as_view, gpu=op.gpu, name=op.name)
 
     new_ins = [node.inputs[0]] + nw_ts + nw_fs
-    new_outs = new_ifelse(*new_ins, **dict(return_list=True))
+    new_outs = new_ifelse(*new_ins, return_list=True)
 
     rval = []
     for idx in range(len(node.outputs)):
@@ -736,7 +736,7 @@ def cond_merge_random_op(fgraph, main_node):
                 gpu=False,
                 name=mn_name + "&" + pl_name,
             )
-            new_outs = new_ifelse(*new_ins, **dict(return_list=True))
+            new_outs = new_ifelse(*new_ins, return_list=True)
             old_outs = []
             if type(merging_node.outputs) not in (list, tuple):
                 old_outs += [merging_node.outputs]

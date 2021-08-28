@@ -11,6 +11,7 @@ All rights reserved.
 Contains code from NumPy, Copyright (c) 2005-2016, NumPy Developers.
 All rights reserved.
 
+theano/scan/*.py[c]: Razvan Pascanu, Frederic Bastien, James Bergstra, Pascal Lamblin, Arnaud Bergeron, PyMC Developers, Aesara Developers, (c) 2010, Universite de Montreal
 theano/tensor/sharedvar.py: James Bergstra, (c) 2010, Universite de Montreal, 3-clause BSD License
 theano/gradient.py: James Bergstra, Razvan Pascanu, Arnaud Bergeron, Ian Goodfellow, PyMC Developers, Aesara Developers, (c) 2011, Universite de Montreal, 3-clause BSD License
 theano/compile/monitormode.py: this code was initially copied from the 'pyutools' package by its original author, and re-licensed under Theano's license.

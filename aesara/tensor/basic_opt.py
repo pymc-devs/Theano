@@ -465,7 +465,7 @@ class InplaceElemwiseOptimizer(GlobalOptimizer):
                                 )
                             )
                         new_outputs = self.op(new_scal, inplace_pattern)(
-                            *node.inputs, **dict(return_list=True)
+                            *node.inputs, return_list=True
                         )
                         new_node = new_outputs[0].owner
 
@@ -684,7 +684,7 @@ def local_dimshuffle_lift(fgraph, node):
             new_inp = op.__class__(inp.type.broadcastable, op.new_order)(inp)
             new_inputs.append(apply_local_dimshuffle_lift(fgraph, new_inp))
         copy_stack_trace(node.outputs[0], new_inputs)
-        ret = inode.op(*new_inputs, **dict(return_list=True))
+        ret = inode.op(*new_inputs, return_list=True)
         return ret
     if inode and isinstance(inode.op, DimShuffle):
         new_order = [x == "x" and "x" or inode.op.new_order[x] for x in new_order]

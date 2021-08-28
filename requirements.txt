@@ -1,4 +1,5 @@
 -e ./
+dataclasses>=0.7; python_version < '3.7'
 filelock
 flake8==3.8.4
 pep8
